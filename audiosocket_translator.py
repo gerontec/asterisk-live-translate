@@ -557,6 +557,55 @@ async def as_hangup_send(w: asyncio.StreamWriter) -> None:
     await w.drain()
 
 
+def _build_ringback_pcm() -> bytes:
+    """German ringback tone: 425 Hz, 1 s on / 4 s off — one 5 s cycle as 8 kHz PCM16."""
+    import math
+    on_samples  = SR_AS * 1   # 8 000 samples = 1 s
+    off_samples = SR_AS * 4   # 32 000 samples = 4 s
+    tone = b"".join(
+        struct.pack("<h", int(32767 * math.sin(2 * math.pi * 425.0 * i / SR_AS)))
+        for i in range(on_samples)
+    )
+    return tone + bytes(off_samples * 2)   # silence = zero bytes
+
+
+_RINGBACK_PCM: bytes = _build_ringback_pcm()   # pre-computed once at import
+
+
+async def _play_ringback(w: asyncio.StreamWriter, stop: asyncio.Event) -> None:
+    """Send ringback PCM frames until stop is set or the writer fails."""
+    pos   = 0
+    total = len(_RINGBACK_PCM)
+    try:
+        while not stop.is_set():
+            chunk = _RINGBACK_PCM[pos : pos + FRAME_B8].ljust(FRAME_B8, b"\x00")
+            w.write(struct.pack(">BH", AS_AUDIO, FRAME_B8) + chunk)
+            await w.drain()
+            pos = (pos + FRAME_B8) % total
+            await asyncio.sleep(FRAME_MS / 1000)
+    except Exception:
+        pass
+
+
+async def _drain_inbound(
+    r: asyncio.StreamReader, stop: asyncio.Event, fut: asyncio.Future
+) -> None:
+    """Drain incoming audio while in OUTBOUND_WAIT; cancel fut on inbound hangup."""
+    try:
+        while not stop.is_set():
+            try:
+                mtype, _ = await asyncio.wait_for(as_read(r), timeout=0.5)
+                if mtype == AS_HANGUP:
+                    if not fut.done():
+                        fut.cancel()
+                    return
+            except asyncio.TimeoutError:
+                continue
+    except Exception:
+        if not fut.done():
+            fut.cancel()
+
+
 # ══════════════════════════════════════════════════════════════════
 # Audio-Hilfsfunktionen
 # ══════════════════════════════════════════════════════════════════
@@ -1170,18 +1219,33 @@ async def handle_inbound(
         CallState.OUTBOUND_WAIT,
         f"Warte auf Outbound-AudioSocket-Leg (max 60s)"
     )
+    stop_ring = asyncio.Event()
+    ring_task  = asyncio.create_task(_play_ringback(writer, stop_ring))
+    drain_task = asyncio.create_task(_drain_inbound(reader, stop_ring, fut))
     try:
         out_reader, out_writer = await asyncio.wait_for(fut, timeout=60.0)
-    except asyncio.TimeoutError:
-        sess.fail(
-            f"Outbound-Leg Timeout nach 60s für {dial_number} "
-            f"– FritzBox/PJSIP erreichbar?"
-        )
+    except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+        stop_ring.set()
+        ring_task.cancel()
+        drain_task.cancel()
+        await asyncio.gather(ring_task, drain_task, return_exceptions=True)
+        if isinstance(exc, asyncio.TimeoutError):
+            sess.fail(
+                f"Outbound-Leg Timeout nach 60s für {dial_number} "
+                f"– FritzBox/PJSIP erreichbar?"
+            )
+        else:
+            sess.fail(f"Inbound-Hangup während Warten auf {dial_number}")
         await as_hangup_send(writer)
         writer.close()
         return
     finally:
         _out_waiters.pop(partner_uuid, None)
+
+    stop_ring.set()
+    ring_task.cancel()
+    drain_task.cancel()
+    await asyncio.gather(ring_task, drain_task, return_exceptions=True)
 
     sess.transition(
         CallState.CONNECTED,
