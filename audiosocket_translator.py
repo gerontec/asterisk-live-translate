@@ -12,7 +12,7 @@ State Machine pro Anruf:
        → CONNECTED → TRANSLATING → HANGUP → DONE
 """
 
-import asyncio, struct, logging, io, os, time, uuid as uuid_mod, json, wave
+import asyncio, struct, logging, io, os, time, uuid as uuid_mod, json, wave, subprocess, datetime
 import warnings; warnings.filterwarnings("ignore", category=FutureWarning, module="pynvml")
 from pathlib import Path
 # .env laden (Schlüssel=Wert, keine Shell-Expansion)
@@ -31,6 +31,21 @@ from faster_whisper import WhisperModel
 from piper.voice import PiperVoice
 import argostranslate.package as argos_pkg
 import argostranslate.translate as argos_trans
+
+def _build_version() -> str:
+    """Return 'git:<short-hash>' using the repo the script lives in."""
+    try:
+        repo = str(Path(__file__).parent)
+        rev  = subprocess.check_output(
+            ["git", "-C", repo, "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL, text=True,
+        ).strip()
+        return f"git:{rev}"
+    except Exception:
+        return "git:unknown"
+
+VERSION      = _build_version()
+DEPLOYED_AT  = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 # ── Konfiguration ─────────────────────────────────────────────────
 AS_HOST   = "127.0.0.1"
@@ -1177,6 +1192,7 @@ async def status_dumper() -> None:
 # Main
 # ══════════════════════════════════════════════════════════════════
 async def amain() -> None:
+    log.info(f"AudioSocket-Translator  version={VERSION}  deployed={DEPLOYED_AT}")
     log.info("Starte Modell-Load vor Server …")
     await asyncio.get_running_loop().run_in_executor(None, load_models)
     log.info("Modelle bereit — starte Server")
