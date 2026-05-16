@@ -161,7 +161,7 @@ _DIGIT_PREFIX_SUFFIX: list[tuple[str, str | None]] = [
 ]
 
 def _build_german_number_words() -> dict[str, str]:
-    """Generate German number words 10–99 → digit string."""
+    """Generate German number words 10–999 → digit string."""
     ones = ["", "ein", "zwei", "drei", "vier", "fünf", "sechs", "sieben", "acht", "neun"]
     teens = {
         "zehn": 10, "elf": 11, "zwölf": 12, "dreizehn": 13, "vierzehn": 14,
@@ -171,11 +171,32 @@ def _build_german_number_words() -> dict[str, str]:
         20: "zwanzig", 30: "dreißig", 40: "vierzig", 50: "fünfzig",
         60: "sechzig", 70: "siebzig", 80: "achtzig", 90: "neunzig",
     }
-    out: dict[str, str] = {w: str(v) for w, v in teens.items()}
+
+    # 10–99
+    words_1_99: dict[str, int] = {w: v for w, v in teens.items()}
     for tv, tw in tens.items():
-        out[tw] = str(tv)
+        words_1_99[tw] = tv
         for ov in range(1, 10):
-            out[f"{ones[ov]}und{tw}"] = str(tv + ov)
+            words_1_99[f"{ones[ov]}und{tw}"] = tv + ov
+    # single digits as remainder fragments (used for 101–109 etc.)
+    for ov in range(1, 10):
+        words_1_99[ones[ov]] = ov          # "ein"→1, "zwei"→2, …
+
+    out: dict[str, str] = {w: str(v) for w, v in words_1_99.items()}
+
+    # 100–999: {prefix}hundert{optional_remainder}
+    for h in range(1, 10):
+        # "hundert", "zweihundert", …; also "einhundert" as alias for "hundert"
+        h_words = [ones[h] + "hundert"] if h > 1 else ["hundert", "einhundert"]
+        for hw in h_words:
+            out[hw] = str(h * 100)
+            for rem_word, rem_val in words_1_99.items():
+                out[hw + rem_word] = str(h * 100 + rem_val)
+
+    # Remove bare single-digit remainder entries (they live in _WORD_DIGIT directly)
+    for ov in range(1, 10):
+        out.pop(ones[ov], None)
+
     return out
 
 # Spoken number words → digit string (de / it / en / ru)
