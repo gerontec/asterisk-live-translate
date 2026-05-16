@@ -13,6 +13,7 @@ State Machine pro Anruf:
 """
 
 import asyncio, struct, logging, io, os, time, uuid as uuid_mod, json, wave
+import warnings; warnings.filterwarnings("ignore", category=FutureWarning, module="pynvml")
 from pathlib import Path
 # .env laden (Schlüssel=Wert, keine Shell-Expansion)
 _env = Path(__file__).parent / ".env"
@@ -141,12 +142,57 @@ class CallSession:
         )
 
 
-# ── Logging ───────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
+# ── Logging (rotierend, max 90 KB) ────────────────────────────────
+import logging.handlers as _lh
+_log_handler = _lh.RotatingFileHandler(
+    "/tmp/translator.log", maxBytes=90_000, backupCount=1, encoding="utf-8"
 )
+_log_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+_stream_handler = logging.StreamHandler()
+_stream_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+logging.basicConfig(level=logging.INFO, handlers=[_log_handler, _stream_handler])
 log = logging.getLogger("ast")
+
+# ── GPU-Monitoring (pynvml, optional) ─────────────────────────────
+try:
+    import pynvml as _nv
+    _nv.nvmlInit()
+    _nv_handle = _nv.nvmlDeviceGetHandleByIndex(0)
+    _nv_ok = True
+    log.info("GPU-Monitoring aktiv (pynvml)")
+except Exception as _e:
+    _nv_ok = False
+    log.info(f"GPU-Monitoring nicht verfügbar: {_e}")
+
+def _gpu() -> str:
+    if not _nv_ok:
+        return ""
+    try:
+        u = _nv.nvmlDeviceGetUtilizationRates(_nv_handle)
+        m = _nv.nvmlDeviceGetMemoryInfo(_nv_handle)
+        t = _nv.nvmlDeviceGetTemperature(_nv_handle, _nv.NVML_TEMPERATURE_GPU)
+        p = _nv.nvmlDeviceGetPowerUsage(_nv_handle)
+        return (f"GPU {u.gpu:3d}%  "
+                f"MEM {m.used//1024//1024}/{m.total//1024//1024}MiB  "
+                f"{t}°C  {p/1000:.0f}W")
+    except Exception:
+        return "GPU err"
+
+class _GpuPeak:
+    """Peak-Werte für eine Session sammeln."""
+    __slots__ = ("sm", "temp", "watt")
+    def __init__(self): self.sm = self.temp = self.watt = 0
+    def sample(self):
+        if not _nv_ok: return
+        try:
+            u = _nv.nvmlDeviceGetUtilizationRates(_nv_handle)
+            t = _nv.nvmlDeviceGetTemperature(_nv_handle, _nv.NVML_TEMPERATURE_GPU)
+            p = _nv.nvmlDeviceGetPowerUsage(_nv_handle) / 1000
+            self.sm   = max(self.sm,   u.gpu)
+            self.temp = max(self.temp, t)
+            self.watt = max(self.watt, p)
+        except Exception: pass
+    def __str__(self): return f"peak GPU {self.sm}%  {self.temp}°C  {self.watt:.0f}W"
 
 # ── Globaler Zustand ──────────────────────────────────────────────
 _whisper: WhisperModel | None = None
@@ -314,22 +360,27 @@ def _split_into_sentence_chunks(segs) -> list[str]:
     return chunks
 
 
-async def stt_chunks(pcm8: bytes, lang: str, lock: asyncio.Lock) -> list[str]:
+async def stt_chunks(pcm8: bytes, lang: str, lock: asyncio.Lock,
+                     gpu_peak: "_GpuPeak | None" = None) -> list[str]:
     """Transkribiert PCM8 und gibt eine Liste von Satz-Chunks zurück."""
     audio = pcm8_to_float16(pcm8)
     async with lock:
+        log.info(f"STT start  {_gpu()}")
         loop = asyncio.get_running_loop()
+        t0 = time.monotonic()
         segs, _ = await loop.run_in_executor(
             None,
             lambda: _whisper.transcribe(
                 audio, language=lang, beam_size=5,
-                vad_filter=True,               # Silero VAD: Stille vor Whisper herausschneiden
+                vad_filter=True,
                 word_timestamps=True,
-                no_speech_threshold=0.7,       # erhöht: sicherer gegen Halluzinationen
+                no_speech_threshold=0.7,
                 log_prob_threshold=-1.0,
                 condition_on_previous_text=False,
             ),
         )
+        if gpu_peak: gpu_peak.sample()
+        log.info(f"STT done   {_gpu()}  ({time.monotonic()-t0:.2f}s)")
     chunks = _split_into_sentence_chunks(segs)
     if chunks:
         log.debug(f"stt_chunks: {chunks}")
@@ -395,7 +446,8 @@ class Worker:
         self._q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=3)
         self.segments_ok   = 0
         self.segments_skip = 0
-        self._muted        = False   # True während TTS des Partners läuft
+        self._muted        = False
+        self.gpu_peak      = _GpuPeak()
 
     def mute(self, on: bool) -> None:
         """Vom Partner aufgerufen: eigene Eingabe stumm schalten während TTS läuft."""
@@ -434,7 +486,7 @@ class Worker:
                     )
 
                 t0     = time.monotonic()
-                chunks = await stt_chunks(pcm8, self.fl, self.lock)
+                chunks = await stt_chunks(pcm8, self.fl, self.lock, self.gpu_peak)
                 t_stt  = time.monotonic() - t0
 
                 if not chunks:
@@ -709,12 +761,12 @@ async def handle_inbound(
             CallState.DONE,
             f"Loopback done: segs={w_de.segments_ok} skip={w_de.segments_skip}"
         )
-        log.info(f"[Inbound] {sess.summary()}")
+        log.info(f"[Inbound] {sess.summary()}  {w_de.gpu_peak}")
         _sessions.pop(uuid, None)
         return
 
     # ── Outbound starten ──────────────────────────────────────────
-    partner_uuid = f"out-{uuid}"
+    partner_uuid = str(uuid_mod.uuid4())
     loop = asyncio.get_running_loop()
     fut: asyncio.Future = loop.create_future()
     _out_waiters[partner_uuid] = fut
@@ -780,7 +832,7 @@ async def handle_inbound(
         f"Segments ok: DE={w_de.segments_ok} {remote_lang.upper()}={w_re.segments_ok} "
         f"skip: DE={w_de.segments_skip} {remote_lang.upper()}={w_re.segments_skip}"
     )
-    log.info(f"[Inbound] {sess.summary()}")
+    log.info(f"[Inbound] {sess.summary()}  {w_de.gpu_peak} / {w_re.gpu_peak}")
     _sessions.pop(uuid, None)
 
 
@@ -808,14 +860,13 @@ async def handle_connection(
     log.info(f"[AS] Neue Verbindung: uuid={uuid!r} von {addr}")
 
     # Outbound-Leg?
-    if uuid.startswith("out-"):
-        if uuid in _out_waiters and not _out_waiters[uuid].done():
+    if uuid in _out_waiters:
+        if not _out_waiters[uuid].done():
             _out_waiters[uuid].set_result((reader, writer))
             log.info(f"[AS] Outbound-Leg verbunden: {uuid}")
         else:
             log.warning(
-                f"[AS] Kein Waiter für Outbound {uuid} "
-                f"– bekannte Waiter: {list(_out_waiters.keys())}"
+                f"[AS] Outbound-Waiter bereits erledigt für {uuid}"
             )
             writer.close()
         return
@@ -829,12 +880,13 @@ async def handle_connection(
 async def status_dumper() -> None:
     while True:
         await asyncio.sleep(60)
+        gpu = _gpu()
         if _sessions:
-            log.info(f"[Status] {len(_sessions)} aktive Session(s):")
+            log.info(f"[Status] {len(_sessions)} aktive Session(s)  {gpu}")
             for uuid, sess in list(_sessions.items()):
                 log.info(f"  {sess.summary()}")
         else:
-            log.info("[Status] Keine aktiven Sessions")
+            log.info(f"[Status] idle  {gpu}")
 
 
 # ══════════════════════════════════════════════════════════════════
