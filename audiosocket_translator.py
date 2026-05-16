@@ -160,29 +160,59 @@ _DIGIT_PREFIX_SUFFIX: list[tuple[str, str | None]] = [
     ("77",   "77"),   ("7",    "7"),    ("1",    "1"),
 ]
 
-# Spoken number words → digit character (de / it / en / ru)
+def _build_german_number_words() -> dict[str, str]:
+    """Generate German number words 10–99 → digit string."""
+    ones = ["", "ein", "zwei", "drei", "vier", "fünf", "sechs", "sieben", "acht", "neun"]
+    teens = {
+        "zehn": 10, "elf": 11, "zwölf": 12, "dreizehn": 13, "vierzehn": 14,
+        "fünfzehn": 15, "sechzehn": 16, "siebzehn": 17, "achtzehn": 18, "neunzehn": 19,
+    }
+    tens = {
+        20: "zwanzig", 30: "dreißig", 40: "vierzig", 50: "fünfzig",
+        60: "sechzig", 70: "siebzig", 80: "achtzig", 90: "neunzig",
+    }
+    out: dict[str, str] = {w: str(v) for w, v in teens.items()}
+    for tv, tw in tens.items():
+        out[tw] = str(tv)
+        for ov in range(1, 10):
+            out[f"{ones[ov]}und{tw}"] = str(tv + ov)
+    return out
+
+# Spoken number words → digit string (de / it / en / ru)
+# German 10-99 is generated; all lists sorted longest-first so the regex
+# matches "achtundsiebzig" before "acht" or "siebzig".
 _WORD_DIGIT: dict[str, str] = {
-    # German
+    # German single digits
     "null": "0", "eins": "1", "ein": "1", "zwei": "2", "drei": "3",
-    "vier": "4", "fünf": "5", "sechs": "6", "sieben": "7",
-    "acht": "8", "neun": "9",
-    # Italian
+    "vier": "4", "fünf": "5", "sechs": "6", "sieben": "7", "acht": "8", "neun": "9",
+    # Italian single digits
     "zero": "0", "uno": "1", "due": "2", "tre": "3", "quattro": "4",
     "cinque": "5", "sei": "6", "sette": "7", "otto": "8", "nove": "9",
-    # English
-    "one": "1", "two": "2", "five": "5", "six": "6", "seven": "7",
-    "eight": "8", "nine": "9", "ten": "10",
-    # Russian
+    # English single digits
+    "one": "1", "two": "2", "five": "5", "six": "6",
+    "seven": "7", "eight": "8", "nine": "9",
+    # Russian single digits
     "ноль": "0", "один": "1", "два": "2", "три": "3", "четыре": "4",
     "пять": "5", "шесть": "6", "семь": "7", "восемь": "8", "девять": "9",
+    # German 10–99 compound words (generated)
+    **_build_german_number_words(),
 }
 
-# Regex built once from _WORD_DIGIT keys (longest first to avoid partial matches)
+# Regex built once; longest entries first so compound words beat single-digit prefixes
 import re as _re
 _WORD_DIGIT_RE = _re.compile(
     r'\b(' + '|'.join(
         _re.escape(w) for w in sorted(_WORD_DIGIT, key=len, reverse=True)
     ) + r')\b'
+)
+
+# Also match the space-separated German form "acht und siebzig" → merge to "achtundsiebzig"
+_TENS_WORDS = '|'.join([
+    'zwanzig','dreißig','vierzig','fünfzig','sechzig','siebzig','achtzig','neunzig'
+])
+_ONES_WORDS = 'ein|zwei|drei|vier|fünf|sechs|sieben|acht|neun'
+_UND_RE = _re.compile(
+    rf'\b({_ONES_WORDS})\s+und\s+({_TENS_WORDS})\b'
 )
 
 
@@ -198,10 +228,13 @@ def extract_dial_info(text: str) -> tuple[str, str]:
     import re
     text_low = text.lower()
 
-    # Replace spoken number words with digits
-    normalised = _WORD_DIGIT_RE.sub(lambda m: _WORD_DIGIT[m.group(0)], text_low)
+    # Merge space-separated German compound numbers: "acht und siebzig" → "achtundsiebzig"
+    normalised = _UND_RE.sub(lambda m: m.group(1) + 'und' + m.group(2), text_low)
 
-    # Strip "plus" and "+" (international prefix marker)
+    # Replace spoken number words with digit strings (longest match wins)
+    normalised = _WORD_DIGIT_RE.sub(lambda m: _WORD_DIGIT[m.group(0)], normalised)
+
+    # Strip "plus" and "+" (international prefix marker — Whisper writes +49 as "plus 4,9")
     normalised = re.sub(r'\bplus\b|\+', '', normalised)
 
     # Collapse all digit sequences into one string
