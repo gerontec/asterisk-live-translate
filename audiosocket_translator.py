@@ -395,7 +395,7 @@ def load_models() -> None:
 # ══════════════════════════════════════════════════════════════════
 # NLU-Ansage-Generierung (Piper → Asterisk custom sounds)
 # ══════════════════════════════════════════════════════════════════
-SOUNDS_CUSTOM = "/var/lib/asterisk/sounds/custom"
+SOUNDS_CUSTOM = "/usr/share/asterisk/sounds/custom"
 
 NLU_PROMPT_TEXTS: dict[str, str] = {
     "de": "Bitte Zielrufnummer und Sprache nennen.",
