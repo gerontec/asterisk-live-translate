@@ -49,6 +49,10 @@ AMI_USER  = "admin"
 AMI_PASS  = "asterisk123"
 
 SUFFIX_LANG = {"39": "it", "99": "ru"}
+
+# Eigene DIDs — Anruf darauf ist immer Loopback (kein Outbound)
+LOCAL_DIDS = {"+4980424967"}
+
 PIPER_MODELS_DIR = "/home/gh/python/translator/piper_models"
 PIPER_VOICES = {
     "it": "it_IT-paola-medium",
@@ -673,7 +677,8 @@ async def handle_inbound(
     )
 
     # ── Loopback-Echo-Modus: TTS zurück auf den Anrufer ──────────
-    if LOOPBACK_ECHO:
+    # Aktiv wenn: globaler Flag, keine/kurze Zielnummer, oder eigene DID gewählt
+    if LOOPBACK_ECHO or not dial_number or len(dial_number) <= 2 or dial_number in LOCAL_DIDS:
         log.info(f"[Inbound] LOOPBACK_ECHO aktiv — kein Outbound-Dial")
         sess.transition(CallState.CONNECTED, "Loopback-Modus")
         stop  = asyncio.Event()
