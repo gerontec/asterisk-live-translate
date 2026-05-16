@@ -282,6 +282,13 @@ def extract_dial_info(text: str) -> tuple[str, str]:
     if suffix is None or suffix == "_unset":
         return "", ""
 
+    # Normalize to E.164 (+XX…) — Fritz!Box and SIP both require an explicit prefix.
+    # Without it, bare "4917625257878" would be routed as a local extension.
+    if digits.startswith("00"):
+        digits = "+" + digits[2:]          # 0039… → +39…
+    elif not digits.startswith("+"):
+        digits = "+" + digits              # 4917… → +4917…
+
     return digits, suffix
 
 # Eigene DIDs — Anruf darauf ist immer Loopback (kein Outbound)
