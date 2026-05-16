@@ -57,15 +57,46 @@ AMI_PORT  = int(os.environ.get("AMI_PORT", 5038))
 AMI_USER  = os.environ.get("AMI_USER", "admin")
 AMI_PASS  = os.environ.get("AMI_PASS", "")
 
-SUFFIX_LANG = {"39": "it", "99": "ru"}
+SUFFIX_LANG = {
+    "1":   "en",   # +1  USA
+    "7":   "ru",   # +7  Russia
+    "30":  "el",   # +30 Greece
+    "33":  "fr",   # +33 France
+    "34":  "es",   # +34 Spain
+    "38":  "uk",   # +380 Ukraine
+    "39":  "it",   # +39 Italy
+    "44":  "en",   # +44 UK
+    "48":  "pl",   # +48 Poland
+    "55":  "pt",   # +55 Brazil
+    "77":  "kk",   # +77 Kazakhstan
+    "86":  "zh",   # +86 China
+    "90":  "tr",   # +90 Turkey
+    "91":  "hi",   # +91 India
+    "98":  "fa",   # +98 Iran
+    "995": "ka",   # +995 Georgia
+}
 
 # Eigene DIDs — Anruf darauf ist immer Loopback (kein Outbound)
 LOCAL_DIDS = {"+4980424967"}
 
 PIPER_MODELS_DIR = "/home/gh/python/translator/piper_models"
 PIPER_VOICES = {
-    "it": "it_IT-paola-medium",
     "de": "de_DE-thorsten-medium",
+    "it": "it_IT-paola-medium",
+    "ru": "ru_RU-dmitri-medium",
+    "en": "en_GB-alan-medium",
+    "fr": "fr_FR-siwis-medium",
+    "es": "es_ES-davefx-medium",
+    "el": "el_GR-rapunzelina-medium",
+    "pl": "pl_PL-darkman-medium",
+    "pt": "pt_BR-faber-medium",
+    "uk": "uk_UA-ukrainian_tts-medium",
+    "tr": "tr_TR-dfki-medium",
+    "zh": "zh_CN-huayan-medium",
+    "hi": "hi_IN-rohan-medium",
+    "fa": "fa_IR-amir-medium",
+    "kk": "kk_KZ-issai-high",
+    "ka": "ka_GE-natia-medium",
 }
 SAVE_MP3    = "/home/gh/python/ghit.mp3"
 SAVE_DE_WAV = "/home/gh/python/gh_de_in.wav"
@@ -725,9 +756,12 @@ async def handle_inbound(
     sess.transition(CallState.REGISTERED, f"exten={exten}")
 
     sess.exten = exten
-    suffix      = exten[-2:] if len(exten) >= 2 else ""
-    remote_lang = SUFFIX_LANG.get(suffix, "it")
-    dial_number = exten[:-2] if suffix in SUFFIX_LANG else exten
+    matched_suffix = next(
+        (s for s in sorted(SUFFIX_LANG, key=len, reverse=True) if exten.endswith(s)),
+        None
+    )
+    remote_lang = SUFFIX_LANG[matched_suffix] if matched_suffix else "it"
+    dial_number = exten[:-len(matched_suffix)] if matched_suffix else exten
     sess.remote_lang  = remote_lang
     sess.dial_number  = dial_number
 
