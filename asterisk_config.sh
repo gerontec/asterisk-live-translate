@@ -1,8 +1,8 @@
 #!/bin/bash
-# asterisk_config.sh — Asterisk-Konfiguration sichern oder einspielen
+# asterisk_config.sh — save or apply Asterisk configuration
 #
-# save  : /etc/asterisk → asterisk/ (Passwörter → CHANGEME)
-# apply : asterisk/ → /etc/asterisk (Passwörter aus .asterisk-secrets), dann Reload
+# save  : /etc/asterisk → asterisk/ (passwords replaced with CHANGEME)
+# apply : asterisk/ → /etc/asterisk (passwords from .asterisk-secrets), then reload
 
 set -euo pipefail
 
@@ -12,18 +12,18 @@ ETC_AST="/etc/asterisk"
 SECRETS="$REPO/.asterisk-secrets"
 
 usage() {
-    echo "Verwendung: $0 [save|apply]"
-    echo "  save  — /etc/asterisk → asterisk/  (Passwörter bereinigt)"
-    echo "  apply — asterisk/ → /etc/asterisk  (Passwörter aus .asterisk-secrets)"
+    echo "Usage: $0 [save|apply]"
+    echo "  save  — /etc/asterisk → asterisk/  (passwords sanitized)"
+    echo "  apply — asterisk/ → /etc/asterisk  (passwords from .asterisk-secrets)"
     exit 1
 }
 
 save_configs() {
-    echo ">>> extensions_translator.conf sichern..."
+    echo ">>> saving extensions_translator.conf..."
     sudo cp "$ETC_AST/extensions_translator.conf" "$REPO_AST/"
     sudo chown "$USER:$USER" "$REPO_AST/extensions_translator.conf"
 
-    echo ">>> pjsip.conf sichern (Passwörter bereinigt)..."
+    echo ">>> saving pjsip.conf (passwords sanitized)..."
     sudo python3 -c "
 import re, sys
 content = open('$ETC_AST/pjsip.conf').read()
@@ -31,21 +31,21 @@ sanitized = re.sub(r'(password\s*=\s*)\S+', r'\1CHANGEME', content)
 open('$REPO_AST/pjsip.conf', 'w').write(sanitized)
 "
     sudo chown "$USER:$USER" "$REPO_AST/pjsip.conf"
-    echo ">>> Gespeichert in $REPO_AST/ — bitte git add/commit."
+    echo ">>> Saved to $REPO_AST/ — run git add/commit to record changes."
 }
 
 apply_configs() {
     if [ ! -f "$SECRETS" ]; then
-        echo "FEHLER: $SECRETS nicht gefunden."
-        echo "Vorlage kopieren und Passwörter eintragen:"
+        echo "ERROR: $SECRETS not found."
+        echo "Copy the example and fill in passwords:"
         echo "  cp $REPO/.asterisk-secrets.example $SECRETS"
         exit 1
     fi
 
-    echo ">>> extensions_translator.conf einspielen..."
+    echo ">>> applying extensions_translator.conf..."
     sudo cp "$REPO_AST/extensions_translator.conf" "$ETC_AST/"
 
-    echo ">>> pjsip.conf einspielen (Passwörter aus .asterisk-secrets)..."
+    echo ">>> applying pjsip.conf (passwords from .asterisk-secrets)..."
     sudo python3 - <<PYEOF
 import re, sys
 
@@ -77,18 +77,18 @@ for line in lines:
     result.append(line)
 
 if missing:
-    print('WARNUNG: Folgende Passwörter fehlen in .asterisk-secrets:')
+    print('WARNING: missing passwords in .asterisk-secrets (left as CHANGEME):')
     for m in missing:
         print(m)
 
 open('$ETC_AST/pjsip.conf', 'w').write('\n'.join(result))
-print('pjsip.conf geschrieben.')
+print('pjsip.conf written.')
 PYEOF
 
-    echo ">>> Asterisk neu laden..."
+    echo ">>> reloading Asterisk..."
     sudo asterisk -rx "module reload res_pjsip.so"
     sudo asterisk -rx "dialplan reload"
-    echo ">>> Fertig."
+    echo ">>> Done."
 }
 
 case "${1:-}" in
