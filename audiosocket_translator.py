@@ -13,6 +13,14 @@ State Machine pro Anruf:
 """
 
 import asyncio, struct, logging, io, os, time, uuid as uuid_mod, json, wave
+from pathlib import Path
+# .env laden (Schlüssel=Wert, keine Shell-Expansion)
+_env = Path(__file__).parent / ".env"
+if _env.exists():
+    for _line in _env.read_text().splitlines():
+        if "=" in _line and not _line.startswith("#"):
+            _k, _v = _line.split("=", 1)
+            os.environ.setdefault(_k.strip(), _v.strip())
 import numpy as np
 from enum import Enum, auto
 from scipy import signal as sp
@@ -43,10 +51,10 @@ SPEECH_MIN = 8     # mind. 160ms echte Sprache — filtert kurze TTS-Artefakte
 TRUNK     = "PJSIP/%s@fritzbox-out"
 CALLERID  = "linuxsip <+4980425641873>"
 
-AMI_HOST  = "127.0.0.1"
-AMI_PORT  = 5038
-AMI_USER  = "admin"
-AMI_PASS  = "asterisk123"
+AMI_HOST  = os.environ.get("AMI_HOST", "127.0.0.1")
+AMI_PORT  = int(os.environ.get("AMI_PORT", 5038))
+AMI_USER  = os.environ.get("AMI_USER", "admin")
+AMI_PASS  = os.environ.get("AMI_PASS", "")
 
 SUFFIX_LANG = {"39": "it", "99": "ru"}
 

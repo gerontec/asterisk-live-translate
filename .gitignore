@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+piper_models/
+.env
+*.log
+/tmp/
