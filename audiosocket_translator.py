@@ -142,56 +142,89 @@ _LANG_KW: list[tuple[str, str | None]] = [
 ]
 
 # Digit prefix in extracted phone number → SUFFIX_LANG key (None = German, skip)
+# Listed longest-first so "00995" matches before "009" etc.
 _DIGIT_PREFIX_SUFFIX: list[tuple[str, str | None]] = [
-    ("00995", "995"),
-    ("00380", "38"),
-    ("0039",  "39"),
-    ("0086",  "86"),
-    ("0090",  "90"),
-    ("0091",  "91"),
-    ("0098",  "98"),
-    ("0049",  None),
-    ("0044",  "44"),
-    ("0033",  "33"),
-    ("0034",  "34"),
-    ("0048",  "48"),
-    ("0055",  "55"),
-    ("0030",  "30"),
-    ("0077",  "77"),
-    ("007",   "7"),
-    ("001",   "1"),
+    # 00-international format
+    ("00995", "995"), ("00380", "38"),
+    ("0039",  "39"),  ("0086",  "86"),  ("0090",  "90"),
+    ("0091",  "91"),  ("0098",  "98"),  ("0049",  None),
+    ("0044",  "44"),  ("0033",  "33"),  ("0034",  "34"),
+    ("0048",  "48"),  ("0055",  "55"),  ("0030",  "30"),
+    ("0077",  "77"),  ("007",   "7"),   ("001",   "1"),
+    # bare country-code format (Whisper drops leading 00 or strips +)
+    ("995",  "995"),  ("380",  "38"),
+    ("39",   "39"),   ("86",   "86"),   ("90",   "90"),
+    ("91",   "91"),   ("98",   "98"),   ("49",   None),
+    ("44",   "44"),   ("33",   "33"),   ("34",   "34"),
+    ("48",   "48"),   ("55",   "55"),   ("30",   "30"),
+    ("77",   "77"),   ("7",    "7"),    ("1",    "1"),
 ]
+
+# Spoken number words → digit character (de / it / en / ru)
+_WORD_DIGIT: dict[str, str] = {
+    # German
+    "null": "0", "eins": "1", "ein": "1", "zwei": "2", "drei": "3",
+    "vier": "4", "fünf": "5", "sechs": "6", "sieben": "7",
+    "acht": "8", "neun": "9",
+    # Italian
+    "zero": "0", "uno": "1", "due": "2", "tre": "3", "quattro": "4",
+    "cinque": "5", "sei": "6", "sette": "7", "otto": "8", "nove": "9",
+    # English
+    "one": "1", "two": "2", "five": "5", "six": "6", "seven": "7",
+    "eight": "8", "nine": "9", "ten": "10",
+    # Russian
+    "ноль": "0", "один": "1", "два": "2", "три": "3", "четыре": "4",
+    "пять": "5", "шесть": "6", "семь": "7", "восемь": "8", "девять": "9",
+}
+
+# Regex built once from _WORD_DIGIT keys (longest first to avoid partial matches)
+import re as _re
+_WORD_DIGIT_RE = _re.compile(
+    r'\b(' + '|'.join(
+        _re.escape(w) for w in sorted(_WORD_DIGIT, key=len, reverse=True)
+    ) + r')\b'
+)
 
 
 def extract_dial_info(text: str) -> tuple[str, str]:
     """Extract (phone_digits, lang_suffix) from NLU transcription.
 
     Returns ("", "") if a phone number or target language cannot be determined.
-    Caller language keywords and country-code prefixes both feed into suffix detection.
+    Handles:
+    - Spoken number words (eins→1, null→0, uno→1 …)
+    - "plus"/"+" stripped (Whisper transcribes +49 as "plus 4,9" or "plus vier neun")
+    - Both 0039 and bare 39 country-code prefixes
     """
     import re
     text_low = text.lower()
-    digits   = "".join(re.findall(r"\d+", text))
+
+    # Replace spoken number words with digits
+    normalised = _WORD_DIGIT_RE.sub(lambda m: _WORD_DIGIT[m.group(0)], text_low)
+
+    # Strip "plus" and "+" (international prefix marker)
+    normalised = re.sub(r'\bplus\b|\+', '', normalised)
+
+    # Collapse all digit sequences into one string
+    digits = "".join(re.findall(r"\d+", normalised))
 
     if len(digits) < 5:
         return "", ""
 
-    # Keyword match (longest/most-specific keywords listed first)
+    # Language keyword match (run against original lowercased text)
     suffix: str | None = "_unset"
     for kw, sfx in _LANG_KW:
         if kw in text_low:
-            suffix = sfx   # None means German (same lang, no translation suffix)
+            suffix = sfx
             break
 
-    # Fall back to country-prefix detection
+    # Country-prefix detection (00XX then bare XX)
     if suffix == "_unset":
-        suffix = "_unset"
         for prefix, sfx in _DIGIT_PREFIX_SUFFIX:
             if digits.startswith(prefix):
                 suffix = sfx
                 break
 
-    # Still unresolved or explicitly German → no outbound translation possible → DTMF fallback
+    # German or still unresolved → fall back to DTMF
     if suffix is None or suffix == "_unset":
         return "", ""
 
