@@ -76,6 +76,112 @@ SUFFIX_LANG = {
     "995": "ka",   # +995 Georgia
 }
 
+# CallerID prefix → announcement/Whisper language
+# Ordered longest-first so +380 matches before +38 etc.
+CALLERID_PREFIX_LANG: list[tuple[str, str]] = [
+    ("+995", "ka"), ("00995", "ka"),
+    ("+380", "uk"), ("00380", "uk"),
+    ("+49",  "de"), ("0049",  "de"),
+    ("+39",  "it"), ("0039",  "it"),
+    ("+44",  "en"), ("0044",  "en"),
+    ("+33",  "fr"), ("0033",  "fr"),
+    ("+34",  "es"), ("0034",  "es"),
+    ("+48",  "pl"), ("0048",  "pl"),
+    ("+55",  "pt"), ("0055",  "pt"),
+    ("+30",  "el"), ("0030",  "el"),
+    ("+90",  "tr"), ("0090",  "tr"),
+    ("+91",  "hi"), ("0091",  "hi"),
+    ("+98",  "fa"), ("0098",  "fa"),
+    ("+86",  "zh"), ("0086",  "zh"),
+    ("+77",  "kk"), ("0077",  "kk"),
+    ("+7",   "ru"), ("007",   "ru"),
+    ("+1",   "en"), ("001",   "en"),
+]
+
+def callerid_to_lang(callerid: str) -> str:
+    """Map an incoming CallerID number to a language code (default: 'de')."""
+    for prefix, lang in CALLERID_PREFIX_LANG:
+        if callerid.startswith(prefix):
+            return lang
+    return "de"
+
+# NLU: language keyword substrings → dial suffix key (None = German, no suffix)
+_LANG_KW: list[tuple[str, str | None]] = [
+    ("kazakh",      "77"), ("kasachisch", "77"), ("kazakhstan", "77"),
+    ("georgian",    "995"), ("georgisch", "995"), ("georgien",  "995"),
+    ("persian",     "98"),  ("farsi",     "98"),  ("iran",      "98"),
+    ("hindi",       "91"),  ("indien",    "91"),  ("india",     "91"),
+    ("chinese",     "86"),  ("chinesisch","86"),  ("china",     "86"),
+    ("turkish",     "90"),  ("türkisch",  "90"),  ("türkei",    "90"),  ("turkey","90"),
+    ("polish",      "48"),  ("polnisch",  "48"),  ("poland",    "48"),  ("polen", "48"),
+    ("portuguese",  "55"),  ("brasilianisch","55"),("brazil",   "55"),  ("brasil","55"),
+    ("ukrainian",   "38"),  ("ukrainisch","38"),  ("ukraine",   "38"),
+    ("greek",       "30"),  ("griechisch","30"),  ("greece",    "30"),  ("griechenland","30"),
+    ("spanish",     "34"),  ("spanisch",  "34"),  ("spain",     "34"),  ("spanien","34"),
+    ("french",      "33"),  ("französisch","33"), ("france",    "33"),  ("frankreich","33"),
+    ("english",     "44"),  ("englisch",  "44"),  ("england",   "44"),  ("britain","44"),
+    ("russian",     "7"),   ("russisch",  "7"),   ("russia",    "7"),   ("russland","7"),
+    ("italian",     "39"),  ("italienisch","39"), ("italiano",  "39"),  ("italien","39"), ("italia","39"),
+    ("american",    "1"),   ("usa",       "1"),
+    ("deutsch",     None),  ("german",    None),  ("deutschland",None), ("germany",None),
+]
+
+# Digit prefix in extracted phone number → SUFFIX_LANG key (None = German, skip)
+_DIGIT_PREFIX_SUFFIX: list[tuple[str, str | None]] = [
+    ("00995", "995"),
+    ("00380", "38"),
+    ("0039",  "39"),
+    ("0086",  "86"),
+    ("0090",  "90"),
+    ("0091",  "91"),
+    ("0098",  "98"),
+    ("0049",  None),
+    ("0044",  "44"),
+    ("0033",  "33"),
+    ("0034",  "34"),
+    ("0048",  "48"),
+    ("0055",  "55"),
+    ("0030",  "30"),
+    ("0077",  "77"),
+    ("007",   "7"),
+    ("001",   "1"),
+]
+
+
+def extract_dial_info(text: str) -> tuple[str, str]:
+    """Extract (phone_digits, lang_suffix) from NLU transcription.
+
+    Returns ("", "") if a phone number or target language cannot be determined.
+    Caller language keywords and country-code prefixes both feed into suffix detection.
+    """
+    import re
+    text_low = text.lower()
+    digits   = "".join(re.findall(r"\d+", text))
+
+    if len(digits) < 5:
+        return "", ""
+
+    # Keyword match (longest/most-specific keywords listed first)
+    suffix: str | None = "_unset"
+    for kw, sfx in _LANG_KW:
+        if kw in text_low:
+            suffix = sfx   # None means German (same lang, no translation suffix)
+            break
+
+    # Fall back to country-prefix detection
+    if suffix == "_unset":
+        suffix = "_unset"
+        for prefix, sfx in _DIGIT_PREFIX_SUFFIX:
+            if digits.startswith(prefix):
+                suffix = sfx
+                break
+
+    # Still unresolved or explicitly German → no outbound translation possible → DTMF fallback
+    if suffix is None or suffix == "_unset":
+        return "", ""
+
+    return digits, suffix
+
 # Eigene DIDs — Anruf darauf ist immer Loopback (kein Outbound)
 LOCAL_DIDS = {"+4980424967"}
 
@@ -272,6 +378,48 @@ def load_models() -> None:
 
 
 # ══════════════════════════════════════════════════════════════════
+# NLU-Ansage-Generierung (Piper → Asterisk custom sounds)
+# ══════════════════════════════════════════════════════════════════
+SOUNDS_CUSTOM = "/var/lib/asterisk/sounds/custom"
+
+NLU_PROMPT_TEXTS: dict[str, str] = {
+    "de": "Bitte Zielrufnummer und Sprache nennen.",
+    "it": "Prego indicare il numero di destinazione e la lingua.",
+    "ru": "Пожалуйста, назовите номер назначения и язык.",
+    "en": "Please state the destination number and language.",
+    "fr": "Veuillez indiquer le numéro de destination et la langue.",
+    "es": "Por favor, indique el número de destino y el idioma.",
+    "el": "Παρακαλώ αναφέρετε τον αριθμό προορισμού και τη γλώσσα.",
+    "pl": "Proszę podać numer docelowy i język.",
+    "pt": "Por favor, indique o número de destino e o idioma.",
+    "uk": "Будь ласка, назвіть номер призначення та мову.",
+    "tr": "Lütfen hedef numarayı ve dili belirtin.",
+    "zh": "请说出目标号码和语言。",
+    "hi": "कृपया गंतव्य नंबर और भाषा बताएं।",
+    "fa": "لطفاً شماره مقصد و زبان را بگویید.",
+    "kk": "Тағайындалу нөмірі мен тілді айтыңыз.",
+    "ka": "გთხოვთ, მიუთითოთ დანიშნულების ნომერი და ენა.",
+}
+
+
+def generate_nlu_prompts() -> None:
+    """Synthesise NLU announcement WAVs (8 kHz mono s16le) for every loaded Piper voice."""
+    os.makedirs(SOUNDS_CUSTOM, exist_ok=True)
+    for lang, text in NLU_PROMPT_TEXTS.items():
+        if lang not in _piper_voices:
+            log.debug(f"[NLU-Prompt] kein Piper-Modell für {lang}")
+            continue
+        out = os.path.join(SOUNDS_CUSTOM, f"nlu_prompt_{lang}.wav")
+        try:
+            pcm8  = _tts_piper_sync(text, lang)
+            audio = np.frombuffer(pcm8, dtype=np.int16)
+            sf.write(out, audio, SR_AS)
+            log.info(f"[NLU-Prompt] {lang} → {out}")
+        except Exception as exc:
+            log.warning(f"[NLU-Prompt] {lang} Fehler: {exc}")
+
+
+# ══════════════════════════════════════════════════════════════════
 # AudioSocket-Protokoll
 # ══════════════════════════════════════════════════════════════════
 # Asterisk 22 AudioSocket Protokoll (empirisch ermittelt per Sniffer):
@@ -320,6 +468,17 @@ def save_wav(path: str, frames: list[bytes], sr: int = SR_AS) -> None:
         sf.write(path, audio, sr)
     except Exception as e:
         log.warning(f"WAV-Speichern ({path}): {e}")
+
+
+def _read_wav_16k(path: str) -> np.ndarray:
+    """Read any WAV file and return 16 kHz mono float32 array (for Whisper)."""
+    audio, sr = sf.read(path, dtype="float32", always_2d=False)
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    if sr != SR_WH:
+        n = max(1, int(len(audio) * SR_WH / sr))
+        audio = sp.resample(audio, n).astype(np.float32)
+    return audio
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -694,16 +853,101 @@ async def ami_originate(
 
 
 # ══════════════════════════════════════════════════════════════════
-# HTTP-Registrierungs-Endpunkt  (Port 9094)
-# AGI ruft POST /register auf mit {"uuid": "...", "exten": "..."}
-# BEVOR AudioSocket() startet → absolut kein Race möglich
+# HTTP-Endpunkt  (Port 9094)
+# POST /register  — AGI registriert UUID+Exten vor AudioSocket()
+# POST /nlu       — AGI schickt WAV-Pfad, erhält Nummer+Suffix
+# POST /lang      — AGI fragt CallerID-Sprache ab
 # ══════════════════════════════════════════════════════════════════
-async def handle_register(
+def _http_ok_json(writer: asyncio.StreamWriter, body: bytes) -> None:
+    writer.write(
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        + f"Content-Length: {len(body)}\r\n\r\n".encode()
+        + body
+    )
+
+
+def _http_err(writer: asyncio.StreamWriter, code: int, msg: str) -> None:
+    body  = msg.encode()
+    status = {400: "Bad Request", 500: "Internal Server Error"}.get(code, "Error")
+    writer.write(
+        f"HTTP/1.1 {code} {status}\r\nContent-Length: {len(body)}\r\n\r\n".encode() + body
+    )
+
+
+async def _handle_register_body(body: str, writer: asyncio.StreamWriter) -> None:
+    payload = json.loads(body)
+    uid   = payload.get("uuid",  "").strip()
+    exten = payload.get("exten", "").strip()
+    if uid and exten:
+        _exten_map[uid] = exten
+        log.info(f"[REG] uuid={uid[:8]} → exten={exten}")
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
+    else:
+        log.warning(f"[REG] Ungültige Payload: {body!r}")
+        _http_err(writer, 400, "ERR")
+
+
+async def _handle_nlu_body(body: str, writer: asyncio.StreamWriter) -> None:
+    payload = json.loads(body)
+    path    = payload.get("path", "").strip()
+    lang    = payload.get("lang", "de").strip()
+
+    if not path or not os.path.exists(path):
+        log.warning(f"[NLU] Datei nicht gefunden: {path!r}")
+        _http_err(writer, 400, '{"error":"path not found"}')
+        return
+
+    loop = asyncio.get_running_loop()
+
+    # File read + resample (fast, no GPU lock needed)
+    try:
+        audio = await loop.run_in_executor(None, _read_wav_16k, path)
+    except Exception as exc:
+        log.warning(f"[NLU] WAV-Lesen fehlgeschlagen: {exc}")
+        _http_err(writer, 500, '{"error":"wav read"}')
+        return
+
+    # Whisper transcription — use caller-language model for best accuracy
+    async with _whisper_lock_de:
+        segs, _ = await loop.run_in_executor(
+            None,
+            lambda: _whisper.transcribe(
+                audio,
+                language=lang,
+                beam_size=3,
+                vad_filter=True,
+                no_speech_threshold=0.6,
+                condition_on_previous_text=False,
+            ),
+        )
+
+    text   = " ".join(s.text.strip() for s in segs).strip()
+    number, suffix = extract_dial_info(text)
+    log.info(f"[NLU] lang={lang} text={text!r} → number={number!r} suffix={suffix!r}")
+
+    try:
+        os.unlink(path)
+    except Exception:
+        pass
+
+    resp = json.dumps({"text": text, "number": number, "suffix": suffix}).encode()
+    _http_ok_json(writer, resp)
+
+
+async def _handle_lang_body(body: str, writer: asyncio.StreamWriter) -> None:
+    payload  = json.loads(body)
+    callerid = payload.get("callerid", "").strip()
+    lang     = callerid_to_lang(callerid)
+    log.info(f"[LANG] callerid={callerid!r} → lang={lang}")
+    _http_ok_json(writer, json.dumps({"lang": lang}).encode())
+
+
+async def handle_http(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
 ) -> None:
     try:
-        data    = await asyncio.wait_for(reader.read(4096), timeout=3.0)
+        data    = await asyncio.wait_for(reader.read(8192), timeout=10.0)
         request = data.decode(errors="replace")
         body    = ""
         if "\r\n\r\n" in request:
@@ -711,23 +955,29 @@ async def handle_register(
         elif "\n\n" in request:
             body = request.split("\n\n", 1)[1]
 
-        payload = json.loads(body)
-        uid     = payload.get("uuid",  "").strip()
-        exten   = payload.get("exten", "").strip()
+        first_line = request.split("\n", 1)[0].strip()
+        parts      = first_line.split(" ")
+        path       = parts[1] if len(parts) >= 2 else "/"
 
-        if uid and exten:
-            _exten_map[uid] = exten
-            log.info(f"[REG] uuid={uid[:8]} → exten={exten}")
-            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
+        if path.startswith("/nlu"):
+            await _handle_nlu_body(body, writer)
+        elif path.startswith("/lang"):
+            await _handle_lang_body(body, writer)
         else:
-            log.warning(f"[REG] Ungültige Payload: {body!r}")
-            writer.write(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 3\r\n\r\nERR")
+            await _handle_register_body(body, writer)
+
     except Exception as e:
-        log.warning(f"[REG] Fehler: {e}")
-        writer.write(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 3\r\n\r\nERR")
+        log.warning(f"[HTTP] Fehler: {e}")
+        try:
+            _http_err(writer, 500, "ERR")
+        except Exception:
+            pass
     finally:
-        await writer.drain()
-        writer.close()
+        try:
+            await writer.drain()
+            writer.close()
+        except Exception:
+            pass
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -933,9 +1183,12 @@ async def amain() -> None:
 
     asyncio.create_task(status_dumper())
 
-    # HTTP-Registrierungs-Server (AGI → Python, Port 9094)
-    reg_server = await asyncio.start_server(handle_register, REG_HOST, REG_PORT)
-    log.info(f"Registrierungs-Endpunkt lauscht auf {REG_HOST}:{REG_PORT}")
+    # NLU-Ansage-WAVs generieren (nach Piper-Load, vor Server-Start)
+    await asyncio.get_running_loop().run_in_executor(None, generate_nlu_prompts)
+
+    # HTTP-Server (AGI → Python, Port 9094): /register, /nlu, /lang
+    reg_server = await asyncio.start_server(handle_http, REG_HOST, REG_PORT)
+    log.info(f"HTTP-Endpunkt lauscht auf {REG_HOST}:{REG_PORT}")
 
     # AudioSocket-Server (Asterisk → Python, Port 9093)
     as_server = await asyncio.start_server(handle_connection, AS_HOST, AS_PORT)
