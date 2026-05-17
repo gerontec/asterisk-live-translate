@@ -6,6 +6,7 @@ nimmt deutsche Antworten auf, übersetzt zurück auf Italienisch → answer_it.m
 
 import argparse, asyncio, http.client, io, json, os, shutil, subprocess
 import sys, time, wave
+from scipy import signal as sp
 from pathlib import Path
 
 import numpy as np
@@ -49,6 +50,11 @@ DEFAULT_QUESTIONS: dict[str, list[str]] = {
         "Cosa possiamo fare per lei?",
         "Ha altre domande per noi?",
     ],
+    "fr": [
+        "Comment allez-vous aujourd'hui?",
+        "Que pouvons-nous faire pour vous?",
+        "Avez-vous d'autres questions pour nous?",
+    ],
     "ka": [
         "როგორ ხართ დღეს?",
         "როგორ შეგვიძლია დაგეხმაროთ?",
@@ -57,9 +63,11 @@ DEFAULT_QUESTIONS: dict[str, list[str]] = {
 }
 DEFAULT_THANKYOU: dict[str, str] = {
     "it": "Grazie per le sue risposte. Arrivederci.",
+    "fr": "Merci pour vos réponses. Au revoir.",
     "ka": "გმადლობთ თქვენი პასუხებისთვის. ნახვამდის.",
 }
-SR_AS = 8000
+SR_AS     = 16000  # matches patched AudioSocket (SLIN16)
+SR_AST    = 8000   # Asterisk format_wav only accepts 8 kHz for .wav files
 
 
 # ── HTTP-Hilfsfunktionen ──────────────────────────────────────────
@@ -109,14 +117,30 @@ def wav_bytes_to_pcm(wav_bytes: bytes) -> bytes:
 
 
 def deploy_wav(wav_bytes: bytes, name: str) -> None:
+    # Save original at SR_AS (16 kHz) for local use
     tmp = f"/tmp/{name}.wav"
     with open(tmp, "wb") as f:
         f.write(wav_bytes)
+    # Asterisk format_wav only accepts 8 kHz — downsample before deploying
+    buf_in = io.BytesIO(wav_bytes)
+    with wave.open(buf_in, "rb") as wf:
+        pcm = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
+        src_rate = wf.getframerate()
+    if src_rate != SR_AST:
+        n = int(len(pcm) * SR_AST / src_rate)
+        pcm = sp.resample(pcm, n).astype(np.int16)
+    buf_out = io.BytesIO()
+    with wave.open(buf_out, "wb") as wf:
+        wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(SR_AST)
+        wf.writeframes(pcm.tobytes())
+    tmp_ast = f"/tmp/{name}_ast.wav"
+    with open(tmp_ast, "wb") as f:
+        f.write(buf_out.getvalue())
     dst = f"{SOUNDS_CUSTOM}/{name}.wav"
-    r = subprocess.run(["sudo", "cp", tmp, dst], capture_output=True)
+    r = subprocess.run(["sudo", "cp", tmp_ast, dst], capture_output=True)
     if r.returncode != 0:
         try:
-            shutil.copy(tmp, dst)
+            shutil.copy(tmp_ast, dst)
         except Exception as e:
             print(f"  WARN: deploy_wav fehlgeschlagen für {name}: {e}")
 
