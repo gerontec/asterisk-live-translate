@@ -371,6 +371,7 @@ class CallSession:
             f"[{self.uuid[:8]}] FEHLER in {self.state.name}: {reason}\n"
             f"  History: {self._history_str()}"
         )
+        _sessions.pop(self.uuid, None)   # sofort entfernen — kein Zombie im Statuslog
 
     def _history_str(self) -> str:
         lines = []
@@ -1065,13 +1066,14 @@ async def _handle_nlu_body(body: str, writer: asyncio.StreamWriter) -> None:
         _http_err(writer, 500, '{"error":"wav read"}')
         return
 
-    # Whisper transcription — use caller-language model for best accuracy
+    # Whisper transcription — auto-detect language so any spoken language is captured.
+    # Caller language (lang) is kept only for logging context.
     async with _whisper_lock_de:
-        segs, _ = await loop.run_in_executor(
+        segs, info = await loop.run_in_executor(
             None,
             lambda: _whisper.transcribe(
                 audio,
-                language=lang,
+                language=None,          # auto-detect
                 beam_size=3,
                 vad_filter=True,
                 no_speech_threshold=0.6,
@@ -1079,14 +1081,23 @@ async def _handle_nlu_body(body: str, writer: asyncio.StreamWriter) -> None:
             ),
         )
 
-    text   = " ".join(s.text.strip() for s in segs).strip()
+    detected = info.language
+    conf     = info.language_probability
+    text     = " ".join(s.text.strip() for s in segs).strip()
     number, suffix = extract_dial_info(text)
-    log.info(f"[NLU] lang={lang} text={text!r} → number={number!r} suffix={suffix!r}")
+    log.info(
+        f"[NLU] caller_lang={lang} detected={detected}({conf:.2f})"
+        f" text={text!r} → number={number!r} suffix={suffix!r}"
+    )
 
-    try:
-        os.unlink(path)
-    except Exception:
-        pass
+    if not text:
+        # Keep the WAV for post-mortem debugging — do NOT delete
+        log.warning(f"[NLU] leere Transkription — WAV behalten: {path}")
+    else:
+        try:
+            os.unlink(path)
+        except Exception:
+            pass
 
     resp = json.dumps({"text": text, "number": number, "suffix": suffix}).encode()
     _http_ok_json(writer, resp)
