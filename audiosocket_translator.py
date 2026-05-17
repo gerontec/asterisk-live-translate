@@ -3,14 +3,18 @@
 SIP Translation B2BUA via AudioSocket — Asterisk 22
 ====================================================
 Linphone / Fritz!Box  →  Asterisk (AudioSocket TCP)
-  → Whisper STT  →  Argostranslate  →  Piper TTS
+  → Whisper STT  →  NLLB-200  →  Piper TTS
   →  Asterisk (AudioSocket TCP)
-→  Fritz!Box / PSTN  (IT / RU)
+→  Fritz!Box / PSTN  (IT / RU / FR / …)
 
 State Machine pro Anruf:
   INIT → AMI_WAIT → OUTBOUND_DIALING → OUTBOUND_WAIT
        → CONNECTED → TRANSLATING → HANGUP → DONE
 """
+
+# torch must be imported before ctranslate2/transformers to prevent
+# ctranslate2 from disabling PyTorch globally (version-check side-effect)
+import torch
 
 import asyncio, struct, logging, io, os, time, uuid as uuid_mod, json, wave, subprocess, datetime
 import warnings; warnings.filterwarnings("ignore", category=FutureWarning, module="pynvml")
@@ -29,8 +33,7 @@ import soundfile as sf
 import webrtcvad
 from faster_whisper import WhisperModel
 from piper.voice import PiperVoice
-import argostranslate.package as argos_pkg
-import argostranslate.translate as argos_trans
+from transformers import NllbTokenizer, AutoModelForSeq2SeqLM
 
 def _build_version() -> str:
     """Return 'git:<short-hash>' using the repo the script lives in."""
@@ -66,6 +69,18 @@ SPEECH_MIN = 8     # mind. 160ms echte Sprache — filtert kurze TTS-Artefakte
 
 TRUNK     = "PJSIP/%s@fritzbox-out"
 CALLERID  = "linuxsip <+4980425641873>"
+
+NLLB_MODEL  = "facebook/nllb-200-distilled-600M"
+NLLB_CACHE  = os.path.join(os.path.dirname(__file__), "nllb_cache")
+NLLB_LANG: dict[str, str] = {
+    "de": "deu_Latn", "en": "eng_Latn", "fr": "fra_Latn", "it": "ita_Latn",
+    "ru": "rus_Cyrl", "es": "spa_Latn", "el": "ell_Grek", "pl": "pol_Latn",
+    "pt": "por_Latn", "uk": "ukr_Cyrl", "kk": "kaz_Cyrl", "zh": "zho_Hans",
+    "tr": "tur_Latn", "hi": "hin_Deva", "fa": "pes_Arab", "ka": "kat_Geor",
+}
+
+_nllb_tok:   "NllbTokenizer | None"          = None
+_nllb_model: "AutoModelForSeq2SeqLM | None"  = None
 
 AMI_HOST  = os.environ.get("AMI_HOST", "127.0.0.1")
 AMI_PORT  = int(os.environ.get("AMI_PORT", 5038))
@@ -471,20 +486,18 @@ def load_models() -> None:
             log.warning(f"  Piper {lang}: Modell nicht gefunden: {path}")
     log.info("Piper bereit.")
 
-    log.info("Prüfe Argostranslate-Pakete …")
-    argos_pkg.update_package_index()
-    installed = {(p.from_code, p.to_code)
-                 for p in argos_pkg.get_installed_packages()}
-    for fl, tl in [("de","it"),("it","de"),("de","en"),("en","it"),
-                   ("it","en"),("en","de"),("ru","en"),("en","ru")]:
-        if (fl, tl) not in installed:
-            avail = argos_pkg.get_available_packages()
-            pkg = next((p for p in avail
-                        if p.from_code == fl and p.to_code == tl), None)
-            if pkg:
-                log.info(f"  Installiere {fl}→{tl} …")
-                argos_pkg.install_from_path(pkg.download())
-    log.info("Argostranslate bereit.")
+    global _nllb_tok, _nllb_model
+    log.info("Lade NLLB-200-distilled-600M …")
+    warnings.filterwarnings("ignore", category=FutureWarning)
+    _nllb_tok = NllbTokenizer.from_pretrained(
+        NLLB_MODEL, cache_dir=NLLB_CACHE, clean_up_tokenization_spaces=True
+    )
+    _nllb_model = AutoModelForSeq2SeqLM.from_pretrained(
+        NLLB_MODEL, cache_dir=NLLB_CACHE, torch_dtype=torch.float16,
+    ).to("cuda")
+    _nllb_model.eval()
+    vram = torch.cuda.memory_allocated() // 1024 // 1024
+    log.info(f"NLLB bereit  ({vram} MB VRAM)")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -739,14 +752,18 @@ async def stt_chunks(pcm8: bytes, lang: str, lock: asyncio.Lock,
 def translate_sync(text: str, fl: str, tl: str) -> str:
     if fl == tl:
         return text
-    try:
-        r = argos_trans.translate(text, fl, tl)
-        if r:
-            return r
-    except Exception:
-        pass
-    en = argos_trans.translate(text, fl, "en")
-    return argos_trans.translate(en, "en", tl)
+    src = NLLB_LANG.get(fl, "deu_Latn")
+    tgt = NLLB_LANG.get(tl, "eng_Latn")
+    _nllb_tok.src_lang = src
+    inputs = _nllb_tok(text, return_tensors="pt", padding=True).to("cuda")
+    with torch.no_grad():
+        out = _nllb_model.generate(
+            **inputs,
+            forced_bos_token_id=_nllb_tok.convert_tokens_to_ids(tgt),
+            max_new_tokens=256,
+            num_beams=4,
+        )
+    return _nllb_tok.batch_decode(out, skip_special_tokens=True)[0]
 
 
 def _tts_piper_sync(text: str, lang: str) -> bytes:
