@@ -23,7 +23,8 @@ REG_PORT = 9094
 
 AGI_HOST     = "127.0.0.1"
 AGI_PORT     = 4573
-SILENCE_SECS = 1   # Sekunden Stille = Antwortende
+SILENCE_SECS  = 2    # Sekunden Stille nach letztem Wort = Antwortende
+LEAD_IN_SECS  = 0.5  # Pause nach Frage bevor Aufnahme startet (Anlaufzeit)
 
 AMI_HOST   = os.environ.get("AMI_HOST", "127.0.0.1")
 AMI_PORT   = int(os.environ.get("AMI_PORT", 5038))
@@ -168,8 +169,9 @@ class BotAGISession:
         for i in range(1, self.n_questions + 1):
             t_frage = time.monotonic()
             await agi(f'STREAM FILE custom/bot_frage{i} ""')
+            await agi(f"EXEC Wait {LEAD_IN_SECS}")
             t_rec = time.monotonic()
-            # Blockiert bis SILENCE_SECS Stille oder max 30s — danach ist WAV fertig
+            # Blockiert bis SILENCE_SECS Stille nach letztem Wort — WAV dann fertig
             await agi(
                 f'RECORD FILE /tmp/bot_answer{i} wav "" 30000 0 s={SILENCE_SECS}'
             )
@@ -316,14 +318,12 @@ async def main(dest: str, it_questions: list[str]) -> int:
             transcript_lines.append(f"Antwort {i}: nicht aufgenommen")
             continue
 
-        # FIX: Sprache explizit auf DE erzwingen
         t_nlu0 = time.monotonic()
         de_text = await loop.run_in_executor(None, api_nlu, path, "de")
         t_nlu1 = time.monotonic()
-        print(f"  Antwort {i} [DE] ({t_nlu1-t_nlu0:.1f}s NLU): {de_text!r}")
 
         if not de_text.strip():
-            print(f"  Antwort {i}: leere Transkription übersprungen")
+            print(f"  [{i}] DE: (leer)  [{t_nlu1-t_nlu0:.1f}s NLU]")
             transcript_lines.append(f"Antwort {i} [DE]: (leer)")
             continue
 
@@ -333,7 +333,9 @@ async def main(dest: str, it_questions: list[str]) -> int:
         t_tts0 = time.monotonic()
         wav_bytes = await loop.run_in_executor(None, api_tts, it_text, "it")
         t_tts1 = time.monotonic()
-        print(f"  Antwort {i} [IT] ({t_tr1-t_tr0:.1f}s Translate, {t_tts1-t_tts0:.1f}s TTS): {it_text!r}")
+
+        print(f"  [{i}] DE: {de_text}")
+        print(f"       IT: {it_text}  [{t_nlu1-t_nlu0:.1f}s NLU  {t_tr1-t_tr0:.1f}s TRL  {t_tts1-t_tts0:.1f}s TTS]")
 
         transcript_lines.append(f"Antwort {i} [DE]: {de_text}")
         transcript_lines.append(f"Antwort {i} [IT]: {it_text}")

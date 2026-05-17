@@ -73,7 +73,7 @@ SPEECH_MIN = 8     # mind. 160ms echte Sprache — filtert kurze TTS-Artefakte
 TRUNK     = os.environ.get("TEST_TRUNK", "PJSIP/%s@fritzbox-out")
 CALLERID  = "linuxsip <+4980425641873>"
 
-NLLB_MODEL  = "facebook/nllb-200-distilled-600M"
+NLLB_MODEL  = "facebook/nllb-200-distilled-1.3B"
 NLLB_CACHE  = os.path.join(os.path.dirname(__file__), "nllb_cache")
 NLLB_LANG: dict[str, str] = {
     "de": "deu_Latn", "en": "eng_Latn", "fr": "fra_Latn", "it": "ita_Latn",
