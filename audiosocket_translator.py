@@ -1140,6 +1140,40 @@ async def _handle_nlu_body(body: str, writer: asyncio.StreamWriter) -> None:
     _http_ok_json(writer, resp)
 
 
+async def _handle_translate_body(body: str, writer: asyncio.StreamWriter) -> None:
+    payload = json.loads(body)
+    text = payload.get("text", "").strip()
+    src  = payload.get("from", "de").strip()
+    tgt  = payload.get("to",   "it").strip()
+    if not text:
+        _http_err(writer, 400, '{"error":"no text"}')
+        return
+    result = await _gpu_server.run(lambda: translate_sync(text, src, tgt))
+    _http_ok_json(writer, json.dumps({"result": result}).encode())
+
+
+async def _handle_tts_body(body: str, writer: asyncio.StreamWriter) -> None:
+    payload = json.loads(body)
+    text = payload.get("text", "").strip()
+    lang = payload.get("lang", "it").strip()
+    if not text:
+        _http_err(writer, 400, '{"error":"no text"}')
+        return
+    pcm8 = await tts(text, lang)
+    buf  = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(SR_AS)
+        wf.writeframes(pcm8)
+    wav_bytes = buf.getvalue()
+    writer.write(
+        b"HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\n"
+        + f"Content-Length: {len(wav_bytes)}\r\n\r\n".encode()
+        + wav_bytes
+    )
+
+
 async def _handle_lang_body(body: str, writer: asyncio.StreamWriter) -> None:
     payload  = json.loads(body)
     callerid = payload.get("callerid", "").strip()
@@ -1169,6 +1203,10 @@ async def handle_http(
             await _handle_nlu_body(body, writer)
         elif path.startswith("/lang"):
             await _handle_lang_body(body, writer)
+        elif path.startswith("/translate"):
+            await _handle_translate_body(body, writer)
+        elif path.startswith("/tts"):
+            await _handle_tts_body(body, writer)
         else:
             await _handle_register_body(body, writer)
 
