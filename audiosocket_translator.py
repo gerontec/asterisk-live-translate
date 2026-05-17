@@ -17,6 +17,7 @@ State Machine pro Anruf:
 import torch
 
 import asyncio, struct, logging, io, os, time, uuid as uuid_mod, json, wave, subprocess, datetime
+from typing import Any, Callable
 import warnings; warnings.filterwarnings("ignore", category=FutureWarning, module="pynvml")
 from pathlib import Path
 # .env laden (Schlüssel=Wert, keine Shell-Expansion)
@@ -456,10 +457,49 @@ class _GpuPeak:
         except Exception: pass
     def __str__(self): return f"peak GPU {self.sm}%  {self.temp}°C  {self.watt:.0f}W"
 
+
+# ══════════════════════════════════════════════════════════════════
+# GPU-Inference-Server — strikte Trennung simultaner Anrufe
+# ══════════════════════════════════════════════════════════════════
+class GpuInferenceServer:
+    """FIFO-Queue für alle GPU-Jobs (Whisper + NLLB).
+
+    Jeder Anruf reiht seine Segmente als Future-Jobs ein.
+    Der Consumer arbeitet sequenziell — bei N simultanen Calls
+    blockiert kein Anruf einen anderen; alle Segmente werden
+    fair abgearbeitet ohne globale Locks.
+    """
+
+    def __init__(self) -> None:
+        self._q: asyncio.Queue[tuple[Callable, asyncio.Future]] = asyncio.Queue()
+
+    def start(self) -> None:
+        asyncio.create_task(self._consumer())
+
+    async def _consumer(self) -> None:
+        loop = asyncio.get_running_loop()
+        while True:
+            fn, fut = await self._q.get()
+            if fut.cancelled():
+                continue
+            try:
+                result = await loop.run_in_executor(None, fn)
+                if not fut.done():
+                    fut.set_result(result)
+            except Exception as exc:
+                if not fut.done():
+                    fut.set_exception(exc)
+
+    async def run(self, fn: Callable[[], Any]) -> Any:
+        """Sync-Callable in die GPU-Queue einreihen und Ergebnis awaiten."""
+        fut: asyncio.Future = asyncio.get_running_loop().create_future()
+        await self._q.put((fn, fut))
+        return await fut
+
+
 # ── Globaler Zustand ──────────────────────────────────────────────
 _whisper: WhisperModel | None = None
-_whisper_lock_de = asyncio.Lock()   # separate Locks: beide Richtungen parallel
-_whisper_lock_re = asyncio.Lock()
+_gpu_server: GpuInferenceServer          # wird in amain() gestartet
 _piper_voices: dict[str, PiperVoice] = {}
 
 _exten_map: dict[str, str] = {}
@@ -722,27 +762,24 @@ def _split_into_sentence_chunks(segs) -> list[str]:
     return chunks
 
 
-async def stt_chunks(pcm8: bytes, lang: str, lock: asyncio.Lock,
+async def stt_chunks(pcm8: bytes, lang: str, gpu_server: "GpuInferenceServer",
                      gpu_peak: "_GpuPeak | None" = None) -> list[str]:
     """Transkribiert PCM8 und gibt eine Liste von Satz-Chunks zurück."""
     audio = pcm8_to_float16(pcm8)
-    async with lock:
-        log.info(f"STT start  {_gpu()}")
-        loop = asyncio.get_running_loop()
-        t0 = time.monotonic()
-        segs, _ = await loop.run_in_executor(
-            None,
-            lambda: _whisper.transcribe(
-                audio, language=lang, beam_size=5,
-                vad_filter=True,
-                word_timestamps=True,
-                no_speech_threshold=0.7,
-                log_prob_threshold=-1.0,
-                condition_on_previous_text=False,
-            ),
+    log.info(f"STT start  {_gpu()}")
+    t0 = time.monotonic()
+    segs, _ = await gpu_server.run(
+        lambda: _whisper.transcribe(
+            audio, language=lang, beam_size=5,
+            vad_filter=True,
+            word_timestamps=True,
+            no_speech_threshold=0.7,
+            log_prob_threshold=-1.0,
+            condition_on_previous_text=False,
         )
-        if gpu_peak: gpu_peak.sample()
-        log.info(f"STT done   {_gpu()}  ({time.monotonic()-t0:.2f}s)")
+    )
+    if gpu_peak: gpu_peak.sample()
+    log.info(f"STT done   {_gpu()}  ({time.monotonic()-t0:.2f}s)")
     chunks = _split_into_sentence_chunks(segs)
     if chunks:
         log.debug(f"stt_chunks: {chunks}")
@@ -799,15 +836,15 @@ class Worker:
         writer: asyncio.StreamWriter,
         label: str,
         session: CallSession,
-        whisper_lock: asyncio.Lock,
+        gpu_server: "GpuInferenceServer",
         echo_partner: "Worker | None" = None,
     ) -> None:
-        self.fl    = from_lang
-        self.tl    = to_lang
-        self.w     = writer
-        self.label = label
-        self.sess  = session
-        self.lock  = whisper_lock
+        self.fl         = from_lang
+        self.tl         = to_lang
+        self.w          = writer
+        self.label      = label
+        self.sess       = session
+        self.gpu_server = gpu_server
         self.echo_partner: Worker | None = echo_partner  # wird nach Init gesetzt
         self._q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=3)
         self.segments_ok   = 0
@@ -852,7 +889,7 @@ class Worker:
                     )
 
                 t0     = time.monotonic()
-                chunks = await stt_chunks(pcm8, self.fl, self.lock, self.gpu_peak)
+                chunks = await stt_chunks(pcm8, self.fl, self.gpu_server, self.gpu_peak)
                 t_stt  = time.monotonic() - t0
 
                 if not chunks:
@@ -877,8 +914,9 @@ class Worker:
                 try:
                     for i, chunk in enumerate(chunks):
                         t0    = time.monotonic()
-                        trans = await loop.run_in_executor(
-                            None, translate_sync, chunk, self.fl, self.tl
+                        fl, tl, ch = self.fl, self.tl, chunk
+                        trans = await self.gpu_server.run(
+                            lambda: translate_sync(ch, fl, tl)
                         )
                         t_tr  = time.monotonic() - t0
                         log.info(
@@ -1085,18 +1123,16 @@ async def _handle_nlu_body(body: str, writer: asyncio.StreamWriter) -> None:
 
     # Whisper transcription — auto-detect language so any spoken language is captured.
     # Caller language (lang) is kept only for logging context.
-    async with _whisper_lock_de:
-        segs, info = await loop.run_in_executor(
-            None,
-            lambda: _whisper.transcribe(
-                audio,
-                language=None,          # auto-detect
-                beam_size=3,
-                vad_filter=True,
-                no_speech_threshold=0.6,
-                condition_on_previous_text=False,
-            ),
+    segs, info = await _gpu_server.run(
+        lambda: _whisper.transcribe(
+            audio,
+            language=None,          # auto-detect
+            beam_size=3,
+            vad_filter=True,
+            no_speech_threshold=0.6,
+            condition_on_previous_text=False,
         )
+    )
 
     detected = info.language
     conf     = info.language_probability
@@ -1214,7 +1250,7 @@ async def handle_inbound(
         stop  = asyncio.Event()
         w_de  = Worker(
             "de", remote_lang, writer,
-            f"DE→{remote_lang.upper()}[LOOP]", sess, _whisper_lock_de
+            f"DE→{remote_lang.upper()}[LOOP]", sess, _gpu_server
         )
         recv_in = asyncio.create_task(
             recv_loop(reader, w_de, SAVE_DE_WAV, "Inbound", stop, sess)
@@ -1282,8 +1318,8 @@ async def handle_inbound(
 
     # ── Audio-Bridge starten ──────────────────────────────────────
     stop = asyncio.Event()
-    w_de = Worker("de",        remote_lang, out_writer, f"DE→{remote_lang.upper()}", sess, _whisper_lock_de)
-    w_re = Worker(remote_lang, "de",        writer,     f"{remote_lang.upper()}→DE", sess, _whisper_lock_re)
+    w_de = Worker("de",        remote_lang, out_writer, f"DE→{remote_lang.upper()}", sess, _gpu_server)
+    w_re = Worker(remote_lang, "de",        writer,     f"{remote_lang.upper()}→DE", sess, _gpu_server)
 
     # Echo-Unterdrückung: jeder Worker kennt seinen Partner
     # w_de spielt TTS auf out_writer → muted w_re (IT-Eingang)
@@ -1378,7 +1414,11 @@ async def status_dumper() -> None:
 # Main
 # ══════════════════════════════════════════════════════════════════
 async def amain() -> None:
+    global _gpu_server
     log.info(f"AudioSocket-Translator  version={VERSION}  deployed={DEPLOYED_AT}")
+    _gpu_server = GpuInferenceServer()
+    _gpu_server.start()
+    log.info("GPU-Inference-Server gestartet")
     log.info("Starte Modell-Load vor Server …")
     await asyncio.get_running_loop().run_in_executor(None, load_models)
     log.info("Modelle bereit — starte Server")

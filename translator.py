@@ -7,6 +7,7 @@ Zielsprache via letzte 2 Ziffern der Rufnummer: xx39=IT, xx99=RU
 """
 
 import asyncio
+from typing import Any, Callable
 import aiohttp
 import websockets
 import json
@@ -79,7 +80,38 @@ log = logging.getLogger("translator")
 # ================================================================
 
 _whisper_model: WhisperModel | None = None
-_whisper_lock = asyncio.Lock()  # serialisiert GPU-Zugriffe bei Gleichzeitig-Sprechen
+
+
+class GpuInferenceServer:
+    """FIFO-Queue für alle Whisper-GPU-Jobs — strikte Trennung simultaner Calls."""
+
+    def __init__(self) -> None:
+        self._q: asyncio.Queue[tuple[Callable, asyncio.Future]] = asyncio.Queue()
+
+    def start(self) -> None:
+        asyncio.create_task(self._consumer())
+
+    async def _consumer(self) -> None:
+        loop = asyncio.get_running_loop()
+        while True:
+            fn, fut = await self._q.get()
+            if fut.cancelled():
+                continue
+            try:
+                result = await loop.run_in_executor(None, fn)
+                if not fut.done():
+                    fut.set_result(result)
+            except Exception as exc:
+                if not fut.done():
+                    fut.set_exception(exc)
+
+    async def run(self, fn: Callable[[], Any]) -> Any:
+        fut: asyncio.Future = asyncio.get_running_loop().create_future()
+        await self._q.put((fn, fut))
+        return await fut
+
+
+_gpu_server: GpuInferenceServer
 
 
 def get_whisper() -> WhisperModel:
@@ -392,18 +424,16 @@ class TranslationWorker:
     async def _process(self, pcm: bytes):
         audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
 
-        # Whisper STT — Lock verhindert gleichzeitige GPU-Zugriffe beider Seiten
-        loop = asyncio.get_running_loop()
-        async with _whisper_lock:
-            segments, _ = await loop.run_in_executor(
-                None,
-                lambda: get_whisper().transcribe(
-                    audio,
-                    language=self.from_lang,
-                    beam_size=5,
-                    vad_filter=True,
-                )
+        # Whisper STT — über GPU-Inference-Server serialisiert
+        fl = self.from_lang
+        segments, _ = await _gpu_server.run(
+            lambda: get_whisper().transcribe(
+                audio,
+                language=fl,
+                beam_size=5,
+                vad_filter=True,
             )
+        )
         text = " ".join(s.text for s in segments).strip()
         if not text:
             return
@@ -532,6 +562,9 @@ class CallBridge:
 # ================================================================
 
 async def main():
+    global _gpu_server
+    _gpu_server = GpuInferenceServer()
+    _gpu_server.start()
     load_models()
 
     ws_url = (f"ws://{ARI_HOST}:{ARI_PORT}/ari/events"
