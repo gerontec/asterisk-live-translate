@@ -70,7 +70,7 @@ SPEECH_MIN = 8     # mind. 160ms echte Sprache — filtert kurze TTS-Artefakte
 TRUNK     = "PJSIP/%s@fritzbox-out"
 CALLERID  = "linuxsip <+4980425641873>"
 
-NLLB_MODEL  = "facebook/nllb-200-distilled-600M"
+NLLB_MODEL  = "facebook/nllb-200-distilled-1.3B"
 NLLB_CACHE  = os.path.join(os.path.dirname(__file__), "nllb_cache")
 NLLB_LANG: dict[str, str] = {
     "de": "deu_Latn", "en": "eng_Latn", "fr": "fra_Latn", "it": "ita_Latn",
@@ -487,7 +487,7 @@ def load_models() -> None:
     log.info("Piper bereit.")
 
     global _nllb_tok, _nllb_model
-    log.info("Lade NLLB-200-distilled-600M …")
+    log.info("Lade NLLB-200-distilled-1.3B …")
     warnings.filterwarnings("ignore", category=FutureWarning)
     _nllb_tok = NllbTokenizer.from_pretrained(
         NLLB_MODEL, cache_dir=NLLB_CACHE, clean_up_tokenization_spaces=True
