@@ -16,7 +16,7 @@ State Machine pro Anruf:
 # ctranslate2 from disabling PyTorch globally (version-check side-effect)
 import torch
 
-import asyncio, struct, logging, io, os, time, uuid as uuid_mod, json, wave, subprocess, datetime
+import asyncio, struct, logging, io, os, re, time, uuid as uuid_mod, json, wave, subprocess, datetime
 from typing import Any, Callable
 import warnings; warnings.filterwarnings("ignore", category=FutureWarning, module="pynvml")
 from pathlib import Path
@@ -73,7 +73,7 @@ SPEECH_MIN = 8     # mind. 160ms echte Sprache — filtert kurze TTS-Artefakte
 TRUNK     = os.environ.get("TEST_TRUNK", "PJSIP/%s@fritzbox-out")
 CALLERID  = "linuxsip <+4980425641873>"
 
-NLLB_MODEL  = "facebook/nllb-200-distilled-1.3B"
+NLLB_MODEL  = "facebook/nllb-200-distilled-600M"
 NLLB_CACHE  = os.path.join(os.path.dirname(__file__), "nllb_cache")
 NLLB_LANG: dict[str, str] = {
     "de": "deu_Latn", "en": "eng_Latn", "fr": "fra_Latn", "it": "ita_Latn",
@@ -759,21 +759,31 @@ async def stt_chunks(pcm8: bytes, lang: str, gpu_server: "GpuInferenceServer",
     return chunks
 
 
-def translate_sync(text: str, fl: str, tl: str) -> str:
-    if fl == tl:
-        return text
-    src = NLLB_LANG.get(fl, "deu_Latn")
-    tgt = NLLB_LANG.get(tl, "eng_Latn")
+_SENT_SPLIT_RE = re.compile(r'(?<=[.!?])\s+')
+
+def _translate_one(text: str, src: str, tgt_id: int) -> str:
     _nllb_tok.src_lang = src
     inputs = _nllb_tok(text, return_tensors="pt", padding=True).to("cuda")
     with torch.no_grad():
         out = _nllb_model.generate(
             **inputs,
-            forced_bos_token_id=_nllb_tok.convert_tokens_to_ids(tgt),
+            forced_bos_token_id=tgt_id,
             max_new_tokens=256,
             num_beams=4,
         )
     return _nllb_tok.batch_decode(out, skip_special_tokens=True)[0]
+
+
+def translate_sync(text: str, fl: str, tl: str) -> str:
+    if fl == tl:
+        return text
+    src    = NLLB_LANG.get(fl, "deu_Latn")
+    tgt_id = _nllb_tok.convert_tokens_to_ids(NLLB_LANG.get(tl, "eng_Latn"))
+    # Satzweise übersetzen — verhindert dass NLLB Sätze bei Mehrfacheingabe weglässt
+    sentences = [s.strip() for s in _SENT_SPLIT_RE.split(text) if s.strip()]
+    if len(sentences) <= 1:
+        return _translate_one(text, src, tgt_id)
+    return " ".join(_translate_one(s, src, tgt_id) for s in sentences)
 
 
 def _tts_piper_sync(text: str, lang: str) -> bytes:
