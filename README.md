@@ -2,7 +2,7 @@
 
 Real-time speech translation via Asterisk 22 AudioSocket.
 
-An incoming call is transcribed with **Whisper STT**, translated with **Argostranslate**, and played back via **Piper TTS** — bidirectionally, during the live conversation.
+An incoming call is transcribed with **Whisper STT**, translated with **NLLB-200**, and played back via **Piper TTS** — bidirectionally, during the live conversation.
 
 ## Architecture
 
@@ -13,9 +13,9 @@ SIP client / dus.net DID (+4980424967)
         │  AudioSocket (TCP 9093)
         ▼
  audiosocket_translator.py
-   ├── Whisper medium (CUDA) — STT
-   ├── Argostranslate         — DE↔IT, DE↔RU
-   └── Piper TTS (local)      — speech synthesis
+   ├── Whisper medium (CUDA)              — STT
+   ├── NLLB-200-distilled-1.3B (CUDA)    — direct multilingual translation
+   └── Piper TTS (local)                  — speech synthesis
 ```
 
 ## Supported languages
@@ -42,7 +42,29 @@ Dial suffix corresponds to the E.164 country code of the target language:
 | `995`  | Georgian   | ka_GE-natia-medium        |
 
 The German (DE) side always uses `de_DE-thorsten-medium`. Suffixes `1` and `44` both map to English.
-Argostranslate translates via English as a bridge for pairs without a direct model (e.g. DE→RU goes DE→EN→RU).
+
+### Direct language pair matrix
+
+`facebook/nllb-200-distilled-1.3B` is a direct multilingual model — all 120 pairs below are translated in a single inference step, with no bridge language.
+
+|              | DE | EN | FR | IT | RU | ES | EL | PL | PT | UK | KK | ZH | TR | HI | FA | KA |
+|:-------------|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
+| **DE** Deutsch    | —  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  |
+| **EN** English    | ✓  | —  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  |
+| **FR** Français   | ✓  | ✓  | —  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  |
+| **IT** Italiano   | ✓  | ✓  | ✓  | —  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  |
+| **RU** Русский    | ✓  | ✓  | ✓  | ✓  | —  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  |
+| **ES** Español    | ✓  | ✓  | ✓  | ✓  | ✓  | —  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  |
+| **EL** Ελληνικά  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | —  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  |
+| **PL** Polski     | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | —  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  |
+| **PT** Português  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | —  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  |
+| **UK** Українська | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | —  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  |
+| **KK** Қазақша   | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | —  | ✓  | ✓  | ✓  | ✓  | ✓  |
+| **ZH** 中文       | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | —  | ✓  | ✓  | ✓  | ✓  |
+| **TR** Türkçe     | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | —  | ✓  | ✓  | ✓  |
+| **HI** हिन्दी    | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | —  | ✓  | ✓  |
+| **FA** فارسی      | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | —  | ✓  |
+| **KA** ქართული   | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | ✓  | —  |
 
 ## Call modes
 
@@ -143,10 +165,9 @@ VRAM: 1128 / 7680 MiB — Temperature: 68–69 °C — Power: 25–27 W.
 `faster-whisper` downloads the model automatically on first start. No manual step required.
 The `medium` model is used; it is stored in `~/.cache/huggingface/hub/`.
 
-### Argostranslate (translation)
+### NLLB-200 (translation)
 
-Translation packages are downloaded and installed automatically on first start by `load_models()`.
-No manual step required.
+`facebook/nllb-200-distilled-1.3B` is downloaded automatically by `load_models()` on first start via Hugging Face Hub into `nllb_cache/`. No manual step required.
 
 ### Piper TTS (speech synthesis)
 
@@ -216,6 +237,6 @@ Voice names used by this project are configured in `PIPER_VOICES` in `audiosocke
 ## Requirements
 
 - Python 3.11, CUDA-capable GPU
-- `faster-whisper`, `piper-tts`, `argostranslate`, `webrtcvad`, `scipy`, `soundfile`
+- `faster-whisper`, `piper-tts`, `transformers`, `webrtcvad`, `scipy`, `soundfile`
 - Asterisk 22 with `app_audiosocket`, `res_pjsip`
 - Piper models in `piper_models/` (`.onnx` + `.onnx.json`)
