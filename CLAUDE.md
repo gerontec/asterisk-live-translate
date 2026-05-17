@@ -56,11 +56,14 @@ SPEECH_MIN = 8     # mind. 160ms echte Sprache
   Echtzeit-gepaced → GPU liegt idle → kostenlose Überlappung).
 - **Closure-Fix**: `lambda ch=chunk:` statt `lambda:` im Loop.
 
-### Whisper-Modell
+### Modelle
 ```python
-WhisperModel("medium", device="cuda", compute_type="int8")
+WhisperModel("medium", device="cuda", compute_type="int8")  # ~1.5 GB VRAM
+NLLB_MODEL = "facebook/nllb-200-distilled-600M"             # ~1.2 GB VRAM
 ```
-Kleineres Modell (`small`) würde ~400ms sparen, Genauigkeit sinkt.
+- NLLB-600M ersetzt 1.3B: 3× schneller, 1.4 GB weniger VRAM, gleiche Qualität
+- `translate_sync` splittet an Satzgrenzen (.!?) → NLLB lässt keine Sätze mehr weg
+- Kleineres Whisper (`small`) würde ~400ms sparen, Genauigkeit sinkt
 
 ## Fachvokabular-Hinweis (NLLB)
 Das NLLB-Modell kennt keine Seilbahn-Fachbegriffe ohne Kontext:
