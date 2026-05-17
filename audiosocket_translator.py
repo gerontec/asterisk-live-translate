@@ -884,21 +884,30 @@ class Worker:
 
                 total_tts_s = 0.0
                 total_wr_s  = 0.0
+                # Nächste Übersetzung läuft parallel während as_write_audio spielt.
+                # GPU ist während des Echtzeit-Pacing idle → kostenlose Überlappung.
+                next_trans_task: asyncio.Task | None = None
                 try:
                     for i, chunk in enumerate(chunks):
-                        t0    = time.monotonic()
-                        fl, tl, ch = self.fl, self.tl, chunk
-                        trans = await self.gpu_server.run(
-                            lambda: translate_sync(ch, fl, tl)
-                        )
-                        t_tr  = time.monotonic() - t0
+                        fl, tl = self.fl, self.tl
+
+                        # Übersetzung: vorberechnete Task verwenden oder frisch starten
+                        t0 = time.monotonic()
+                        if next_trans_task is not None:
+                            trans = await next_trans_task
+                            next_trans_task = None
+                        else:
+                            trans = await self.gpu_server.run(
+                                lambda ch=chunk: translate_sync(ch, fl, tl)
+                            )
+                        t_tr = time.monotonic() - t0
                         log.info(
                             f"[{self.label}] TRL[{i+1}/{len(chunks)}]"
-                            f"({t_tr:.2f}s) [{self.tl.upper()}] {trans!r}"
+                            f"({t_tr:.2f}s) [{tl.upper()}] {trans!r}"
                         )
 
                         t0      = time.monotonic()
-                        pcm_out = await tts(trans, self.tl)
+                        pcm_out = await tts(trans, tl)
                         t_tts   = time.monotonic() - t0
                         tts_dur = len(pcm_out) / 2 / SR_AS
                         total_tts_s += tts_dur
@@ -906,6 +915,15 @@ class Worker:
                             f"[{self.label}] TTS[{i+1}/{len(chunks)}]"
                             f"({t_tts:.2f}s) {len(pcm_out)//2} samples"
                         )
+
+                        # Nächste Übersetzung während Abspielen starten (GPU idle)
+                        if i + 1 < len(chunks):
+                            next_ch = chunks[i + 1]
+                            next_trans_task = asyncio.create_task(
+                                self.gpu_server.run(
+                                    lambda ch=next_ch: translate_sync(ch, fl, tl)
+                                )
+                            )
 
                         t_wr = time.monotonic()
                         await as_write_audio(self.w, pcm_out)
