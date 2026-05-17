@@ -743,7 +743,7 @@ async def stt_chunks(pcm8: bytes, lang: str, gpu_server: "GpuInferenceServer",
     t0 = time.monotonic()
     segs, _ = await gpu_server.run(
         lambda: _whisper.transcribe(
-            audio, language=lang, beam_size=5,
+            audio, language=lang, beam_size=1,
             vad_filter=True,
             word_timestamps=True,
             no_speech_threshold=0.7,
