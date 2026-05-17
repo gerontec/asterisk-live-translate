@@ -41,11 +41,24 @@ if not os.path.isdir(SOUNDS_CUSTOM):
 ANSWERS     = [f"/tmp/bot_answer{i}.wav" for i in range(1, 4)]
 N_QUESTIONS = 3
 
-DEFAULT_QUESTIONS = [
-    "Come sta oggi?",
-    "Cosa possiamo fare per lei?",
-    "Ha altre domande per noi?",
-]
+REMOTE_LANG = "it"   # Sprache des Angerufenen — per --lang überschreibbar
+
+DEFAULT_QUESTIONS: dict[str, list[str]] = {
+    "it": [
+        "Come sta oggi?",
+        "Cosa possiamo fare per lei?",
+        "Ha altre domande per noi?",
+    ],
+    "ka": [
+        "როგორ ხართ დღეს?",
+        "როგორ შეგვიძლია დაგეხმაროთ?",
+        "გაქვთ სხვა კითხვები ჩვენთვის?",
+    ],
+}
+DEFAULT_THANKYOU: dict[str, str] = {
+    "it": "Grazie per le sue risposte. Arrivederci.",
+    "ka": "გმადლობთ თქვენი პასუხებისთვის. ნახვამდის.",
+}
 SR_AS = 8000
 
 
@@ -251,7 +264,7 @@ async def ami_originate(dest: str) -> bool:
 
 # ── Haupt-Ablauf ──────────────────────────────────────────────────
 
-async def main(dest: str, it_questions: list[str]) -> int:
+async def main(dest: str, it_questions: list[str], remote_lang: str = "it") -> int:
     loop = asyncio.get_running_loop()
     out_path = Path(__file__).parent / "answer_it.mp3"
 
@@ -261,16 +274,17 @@ async def main(dest: str, it_questions: list[str]) -> int:
     print("=" * 60)
 
     # 1. Fragen übersetzen und TTS-WAVs generieren
-    print("\nSchritt 1: IT-Fragen → DE-TTS-WAVs")
+    rl = remote_lang
+    print(f"\nSchritt 1: {rl.upper()}-Fragen → DE-TTS-WAVs")
     for i, it_q in enumerate(it_questions, 1):
-        de_text = await loop.run_in_executor(None, api_translate, it_q, "it", "de")
+        de_text = await loop.run_in_executor(None, api_translate, it_q, rl, "de")
         print(f"  Frage {i}: {it_q!r} → {de_text!r}")
         wav_bytes = await loop.run_in_executor(None, api_tts, de_text, "de")
         deploy_wav(wav_bytes, f"bot_frage{i}")
 
+    thankyou_src = DEFAULT_THANKYOU.get(rl, DEFAULT_THANKYOU["it"])
     danke_text = await loop.run_in_executor(
-        None, api_translate,
-        "Grazie per le sue risposte. Arrivederci.", "it", "de"
+        None, api_translate, thankyou_src, rl, "de"
     )
     danke_wav = await loop.run_in_executor(None, api_tts, danke_text, "de")
     deploy_wav(danke_wav, "bot_danke")
@@ -309,7 +323,7 @@ async def main(dest: str, it_questions: list[str]) -> int:
 
     # 5. Antworten transkribieren und übersetzen
     t_poststart = time.monotonic()
-    print("\nSchritt 3: DE-Antworten → IT-TTS")
+    print(f"\nSchritt 3: DE-Antworten → {rl.upper()}-TTS")
     it_pcm_parts: list[bytes] = []
     transcript_lines: list[str] = []
     for i, path in enumerate(ANSWERS, 1):
@@ -328,17 +342,17 @@ async def main(dest: str, it_questions: list[str]) -> int:
             continue
 
         t_tr0 = time.monotonic()
-        it_text = await loop.run_in_executor(None, api_translate, de_text, "de", "it")
+        it_text = await loop.run_in_executor(None, api_translate, de_text, "de", rl)
         t_tr1 = time.monotonic()
         t_tts0 = time.monotonic()
-        wav_bytes = await loop.run_in_executor(None, api_tts, it_text, "it")
+        wav_bytes = await loop.run_in_executor(None, api_tts, it_text, rl)
         t_tts1 = time.monotonic()
 
         print(f"  [{i}] DE: {de_text}")
-        print(f"       IT: {it_text}  [{t_nlu1-t_nlu0:.1f}s NLU  {t_tr1-t_tr0:.1f}s TRL  {t_tts1-t_tts0:.1f}s TTS]")
+        print(f"       {rl.upper()}: {it_text}  [{t_nlu1-t_nlu0:.1f}s NLU  {t_tr1-t_tr0:.1f}s TRL  {t_tts1-t_tts0:.1f}s TTS]")
 
         transcript_lines.append(f"Antwort {i} [DE]: {de_text}")
-        transcript_lines.append(f"Antwort {i} [IT]: {it_text}")
+        transcript_lines.append(f"Antwort {i} [{rl.upper()}]: {it_text}")
 
         pcm = wav_bytes_to_pcm(wav_bytes)
         if pcm:
@@ -377,7 +391,9 @@ if __name__ == "__main__":
     ap.add_argument("--callerid",  default="",
                     help="CallerID überschreiben z.B. +4980425641873")
     ap.add_argument("--questions", default="",
-                    help="Semikolon-getrennte IT-Fragen")
+                    help="Semikolon-getrennte Fragen in --lang Sprache")
+    ap.add_argument("--lang", default="it",
+                    help="Sprache des Angerufenen z.B. it ka fr ru (default: it)")
     args = ap.parse_args()
 
     if args.trunk:
@@ -385,9 +401,10 @@ if __name__ == "__main__":
     if args.callerid:
         CALLER_ID = args.callerid
 
+    lang = args.lang.lower()
     questions = (
         [q.strip() for q in args.questions.split(";") if q.strip()]
-        if args.questions else DEFAULT_QUESTIONS
+        if args.questions else DEFAULT_QUESTIONS.get(lang, DEFAULT_QUESTIONS["it"])
     )
 
-    sys.exit(asyncio.run(main(args.dest, questions)))
+    sys.exit(asyncio.run(main(args.dest, questions, remote_lang=lang)))
