@@ -148,15 +148,29 @@ Auto-restarts on failure (max 5 attempts / 2 minutes).
 
 ## Performance (Tesla P4, Whisper medium, CUDA)
 
-First live end-to-end test — 2026-05-16, bidirectional DE↔IT over dus.net DID:
+### Translation latency — NLLB-200-distilled-1.3B (benchmark 2026-05-17)
 
-| Utterance | STT | Translation | TTS | Total |
-|-----------|-----|-------------|-----|-------|
-| "Ende 234." | 0.66 s | 0.41 s | 0.05 s | 1.12 s |
-| "Das ist ziemlich perfekt." | 0.64 s | 0.03 s | 0.03 s | 0.70 s |
+| Sentence length | Median | Min | Max |
+|-----------------|--------|-----|-----|
+| Short (1–3 words) | 400 ms | 316 ms | 440 ms |
+| Medium (4–7 words) | 441 ms | 400 ms | 565 ms |
+| Long (8–13 words) | 671 ms | 650 ms | 695 ms |
 
-GPU during inference: **0% utilization** (Whisper medium completes faster than the 60 s pynvml polling interval).  
-VRAM: 1128 / 7680 MiB — Temperature: 68–69 °C — Power: 25–27 W.
+No cold-start effect — model stays resident in VRAM, latency is constant from the first call.
+
+### End-to-end pipeline
+
+| Component | Median | Note |
+|-----------|--------|------|
+| VAD hangover | 300 ms | SILENCE_FR=15 × 20 ms, fixed |
+| Whisper STT | 600 ms | medium, CUDA int8 |
+| NLLB-200 translation | 400–670 ms | depends on sentence length |
+| Piper TTS | 40 ms | local ONNX |
+| **Total** | **~1.35–1.6 s** | typical phone utterance |
+
+VRAM: Whisper medium ~500 MB + NLLB-1.3B 2618 MB = ~3.1 GB / 7680 MB.  
+GPU utilization: **0%** between inferences (polling interval 60 s).  
+Temperature: 68–69 °C — Power: 25–27 W.
 
 ## Model installation
 
