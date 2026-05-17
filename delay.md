@@ -1,20 +1,20 @@
-# Delay-Messung — AudioSocket Translator
+# Latency Measurement — AudioSocket Translator
 
 ## Benchmark 2026-05-17 — NLLB-200-distilled-1.3B (Tesla P4, CUDA fp16)
 
-Skript: `bench_nllb.py` — reines Translations-Timing, kein STT/TTS.
+Script: `bench_nllb.py` — pure translation timing, no STT/TTS.
 
-### Latenz nach Satzlänge (DE→IT, n=12–18 Läufe je Bucket)
+### Latency by Sentence Length (DE→IT, n=12–18 runs per bucket)
 
-| Bucket | Wortanzahl | Median | Min | Max |
+| Bucket | Word count | Median | Min | Max |
 |--------|-----------|--------|-----|-----|
-| short  | 1–3 Wörter | 400 ms | 316 ms | 440 ms |
-| medium | 4–7 Wörter | 441 ms | 400 ms | 565 ms |
-| long   | 8–13 Wörter | 671 ms | 650 ms | 695 ms |
+| short  | 1–3 words | 400 ms | 316 ms | 440 ms |
+| medium | 4–7 words | 441 ms | 400 ms | 565 ms |
+| long   | 8–13 words | 671 ms | 650 ms | 695 ms |
 
-### Latenz nach Sprachpaar (medium-Sätze, 3 Läufe je Paar)
+### Latency by Language Pair (medium sentences, 3 runs per pair)
 
-| Paar | Median | Min | Max | Beispiel |
+| Pair | Median | Min | Max | Example |
 |------|--------|-----|-----|---------|
 | DE→IT | 525 ms | 400 ms | 565 ms | "Hai chiamato la nonna?" |
 | DE→EN | 525 ms | 400 ms | 565 ms | "Did you call Grandma?" |
@@ -27,34 +27,34 @@ Skript: `bench_nllb.py` — reines Translations-Timing, kein STT/TTS.
 
 ### Cold-start vs. warm
 
-Kein relevanter Unterschied — CUDA-Modell bleibt geladen, keine Warmup-Phase nötig.
-`torch.cuda.empty_cache()` zwischen Läufen: konstant **401 ms**.
-10 aufeinanderfolgende Warm-Läufe: konstant **400–401 ms**.
+No relevant difference — the CUDA model stays loaded, no warm-up phase needed.
+`torch.cuda.empty_cache()` between runs: constant **401 ms**.
+10 consecutive warm runs: constant **400–401 ms**.
 
-### Systemwerte
+### System metrics
 
-| | Wert |
+| | Value |
 |-|-----|
-| Modell-Ladezeit | 3.6 s |
+| Model load time | 3.6 s |
 | VRAM NLLB-1.3B | 2618 MB |
 | GPU (Tesla P4) | fp16 |
 
-### Gesamt-Pipeline mit NLLB vs. Argostranslate
+### Full Pipeline: NLLB vs. Argostranslate
 
-| Komponente | Argostranslate (alt) | NLLB-1.3B (neu) |
+| Component | Argostranslate (old) | NLLB-1.3B (new) |
 |------------|---------------------|-----------------|
-| VAD-Hangover | 300 ms | 300 ms |
+| VAD hangover | 300 ms | 300 ms |
 | Whisper STT | 600 ms median | 600 ms median |
-| Übersetzung | 30 ms (warm) | 400–670 ms |
+| Translation | 30 ms (warm) | 400–670 ms |
 | Piper TTS | 40 ms | 40 ms |
-| **Gesamt** | **~1.0 s** | **~1.35–1.6 s** |
+| **Total** | **~1.0 s** | **~1.35–1.6 s** |
 
-Mehraufwand NLLB: **+350–630 ms** pro Segment — direkte Übersetzung ohne Bridge,
-erheblich bessere Qualität, alle 120 Sprachpaare ohne Umweg über Englisch.
+NLLB overhead: **+350–630 ms** per segment — direct translation without a bridge language,
+significantly better quality, all 120 language pairs without routing through English.
 
 ## Test 2026-05-15 22:56 (Piper TTS, SILENCE_FR=15)
 
-Pipeline pro Segment: **VAD-Hangover → STT → TRL → TTS → erste Audio-Samples**
+Pipeline per segment: **VAD hangover → STT → TRL → TTS → first audio samples**
 
 ```
 Seg  Text (DE)                              VAD   STT    TRL    TTS    Σ
@@ -69,26 +69,26 @@ Seg  Text (DE)                              VAD   STT    TRL    TTS    Σ
  8   "Und wann kommst du morgen früh…"      300ms  0.67s  0.06s  0.05s  1.08s
  9   "Sehr gut."                            300ms  0.57s  0.03s  0.03s  0.93s
 ──────────────────────────────────────────────────────────────────────────
-     Median (echte Segmente 4–9)            300ms  0.60s  0.03s  0.04s  ~1.0s
+     Median (real segments 4–9)             300ms  0.60s  0.03s  0.04s  ~1.0s
 ```
 
-⚠HAL = Whisper-Halluzination (nie gesprochen)
-⚠STT = Whisper-Fehlerkennung (kurzes/unklares Wort → 4× längere STT-Zeit)
+⚠HAL = Whisper hallucination (never spoken)  
+⚠STT = Whisper misrecognition (short/unclear word → 4× longer STT time)
 
-## Komponenten-Breakdown
+## Component Breakdown
 
-| Komponente | Median | Min | Max | Anmerkung |
+| Component | Median | Min | Max | Note |
 |------------|--------|-----|-----|-----------|
-| VAD-Hangover | 300ms | 300ms | 300ms | SILENCE_FR=15 × 20ms, fix |
-| Whisper STT | 600ms | 570ms | 770ms | medium CUDA int8; Outlier 2.45s bei kurzen Wörtern |
-| Argostranslate | 30ms | 20ms | 60ms | DE→EN→IT zweistufig, nach Warmup |
-| Piper TTS | 40ms | 30ms | 50ms | lokal ONNX, kein Netzwerk |
-| **Gesamt** | **~1.0s** | 0.93s | 1.08s | ohne Halluzinationen |
+| VAD hangover | 300 ms | 300 ms | 300 ms | SILENCE_FR=15 × 20 ms, fixed |
+| Whisper STT | 600 ms | 570 ms | 770 ms | medium CUDA int8; outlier 2.45 s on short words |
+| Argostranslate | 30 ms | 20 ms | 60 ms | DE→EN→IT two-stage, after warm-up |
+| Piper TTS | 40 ms | 30 ms | 50 ms | local ONNX, no network |
+| **Total** | **~1.0 s** | 0.93 s | 1.08 s | excluding hallucinations |
 
-## Vergleich edge-TTS vs. Piper (selbe Pipeline)
+## edge-TTS vs. Piper comparison (same pipeline)
 
-| | edge-TTS (vorher) | Piper (jetzt) |
+| | edge-TTS (before) | Piper (now) |
 |-|-------------------|---------------|
-| TTS-Latenz normal | 400–500ms | 30–50ms |
-| TTS-Latenz Spike | bis 11.45s | kein Spike |
-| Gesamt-Delay | ~1.8s | ~1.0s |
+| TTS latency normal | 400–500 ms | 30–50 ms |
+| TTS latency spike | up to 11.45 s | no spike |
+| Total delay | ~1.8 s | ~1.0 s |

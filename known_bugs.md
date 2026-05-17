@@ -1,12 +1,12 @@
-# AudioSocket Translator — Testaufbau & Echo-Delay
+# AudioSocket Translator — Test Setup & Echo Delay
 
-## Testaufbau
+## Test Setup
 
 ```
-Handy (DE-Sprecher)
+Mobile phone (DE speaker)
   │  SIP/RTP
   ▼
-Fritz!Box (SIP-Trunk)
+Fritz!Box (SIP trunk)
   │  PJSIP fritzbox-out
   ▼
 Asterisk PBX
@@ -16,33 +16,33 @@ Asterisk PBX
   ▼
 audiosocket_translator.py
   │
-  ├─ SpeechBuffer (webrtcvad, VAD-Aggressivität 2)
-  │    SILENCE_FR = 25 Frames × 20ms = 500ms Stille → Utterance fertig
-  │    SPEECH_MIN = 8 Frames = 160ms Mindestlänge
+  ├─ SpeechBuffer (webrtcvad, VAD aggressiveness 2)
+  │    SILENCE_FR = 25 frames × 20 ms = 500 ms silence → utterance complete
+  │    SPEECH_MIN = 8 frames = 160 ms minimum length
   │
   ├─ faster-whisper (CUDA)
   │    language=de, beam_size=5, word_timestamps=True
   │    no_speech_threshold=0.6, log_prob_threshold=-1.0
   │
-  ├─ Argostranslate (offline, zweistufig DE→EN→IT)
+  ├─ Argostranslate (offline, two-stage DE→EN→IT)
   │
   └─ edge-TTS (cloud, de-DE-ConradNeural / it-IT-DiegoNeural)
-       → as_write_audio(): paced 20ms/Frame (AudioSocket → Asterisk → Fritz!Box → Handy)
+       → as_write_audio(): paced 20 ms/frame (AudioSocket → Asterisk → Fritz!Box → phone)
 ```
 
-**Loopback-Modus** (`TRANSLATOR_LOOPBACK=1`): kein Outbound-Dial, kein Outbound-Worker;
-nur der Inbound-Worker DE→IT übersetzt und spielt TTS auf denselben Kanal zurück.
+**Loopback mode** (`TRANSLATOR_LOOPBACK=1`): no outbound dial, no outbound worker;
+only the inbound worker translates DE→IT and plays TTS back on the same channel.
 
-### Teststart
+### Test start
 
 ```bash
-# Translator neu starten (nur wenn Code geändert):
+# Restart translator (only if code changed):
 kill $(pgrep -f audiosocket_translator) 2>/dev/null; sleep 1
 TRANSLATOR_LOOPBACK=1 /home/gh/python/translator/start_as.sh \
   > /tmp/translator_loopN.log 2>&1 &
-tail -f /tmp/translator_loopN.log   # warten bis "AudioSocket-Translator lauscht"
+tail -f /tmp/translator_loopN.log   # wait until "AudioSocket-Translator lauscht"
 
-# Anruf auslösen:
+# Trigger call:
 /home/gh/python/venv_py311/bin/python3 \
   /home/gh/python/translator/loopback_call.py \
   > /tmp/loopbackN.log 2>&1 &
@@ -51,35 +51,35 @@ tail -f /tmp/loopbackN.log
 
 ---
 
-## Delay-Problem: Zu lange Pause vor dem IT-Echo
+## Delay Issue: Too Long a Pause Before the IT Echo
 
-**Symptom:** User spricht Deutsch, hört das übersetzte Italienisch mit wahrnehmbarer Verzögerung.
+**Symptom:** User speaks German, hears the translated Italian with a noticeable delay.
 
-### Gemessene Latenzen (Test 2026-05-15 22:36, 7 Segmente)
+### Measured Latencies (Test 2026-05-15 22:36, 7 segments)
 
-| Phase | Dauer |
+| Phase | Duration |
 |-------|-------|
-| VAD Stille-Hangover | **500ms** (SILENCE_FR=25 × 20ms) |
-| Whisper STT (CUDA) | 0.60–0.76s |
-| Argostranslate | 0.02–0.35s |
-| edge-TTS (normal) | 0.40–0.52s |
-| edge-TTS (Spike!) | **11.45s** (Seg 2: Netzwerk-Ausreißer) |
+| VAD silence hangover | **500 ms** (SILENCE_FR=25 × 20 ms) |
+| Whisper STT (CUDA) | 0.60–0.76 s |
+| Argostranslate | 0.02–0.35 s |
+| edge-TTS (normal) | 0.40–0.52 s |
+| edge-TTS (spike!) | **11.45 s** (seg 2: network outlier) |
 
-**Aktuelle Gesamtlatenz** (Ende Sprechen → erste IT-Samples): ~**1.0–1.2s**
-(300ms VAD + 600ms STT + 35ms TRL + 40ms TTS)
+**Current total latency** (end of speech → first IT samples): ~**1.0–1.2 s**
+(300 ms VAD + 600 ms STT + 35 ms TRL + 40 ms TTS)
 
-### Durchgeführte Optimierungen (2026-05-15)
+### Optimizations Applied (2026-05-15)
 
-| Maßnahme | Vorher | Nachher |
+| Measure | Before | After |
 |----------|--------|---------|
-| `SILENCE_FR` 25 → 15 | 500ms VAD-Hangover | 300ms |
-| Piper TTS (lokal) statt edge-TTS | 400–500ms, Spikes bis 11.45s | 30–50ms, keine Spikes |
-| Sentence-Chunk-Streaming (`word_timestamps=True`) | Warten auf ganzes Segment | Erste Chunks sofort |
+| `SILENCE_FR` 25 → 15 | 500 ms VAD hangover | 300 ms |
+| Piper TTS (local) instead of edge-TTS | 400–500 ms, spikes up to 11.45 s | 30–50 ms, no spikes |
+| Sentence-chunk streaming (`word_timestamps=True`) | Wait for full segment | First chunks immediately |
 
-Piper-Modelle: `it_IT-paola-medium.onnx`, `de_DE-thorsten-medium.onnx` (je 61MB, lokal in `piper_models/`).
+Piper models: `it_IT-paola-medium.onnx`, `de_DE-thorsten-medium.onnx` (61 MB each, local in `piper_models/`).
 
-### Verbleibendes Bottleneck: Whisper STT (~600ms)
+### Remaining Bottleneck: Whisper STT (~600 ms)
 
-Whisper medium (CUDA, int8) ist nicht weiter reduzierbar ohne Qualitätsverlust.
-`beam_size=1` oder Modellwechsel auf `small` würden ~200ms sparen — bewusst nicht umgesetzt,
-da 1.2s als akzeptabel gilt und Transkriptionsqualität wichtiger ist.
+Whisper medium (CUDA, int8) cannot be reduced further without quality loss.
+`beam_size=1` or switching to the `small` model would save ~200 ms — deliberately not applied,
+as 1.2 s is considered acceptable and transcription quality takes priority.
