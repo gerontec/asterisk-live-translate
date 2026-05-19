@@ -3,7 +3,7 @@
 Generiert WAV-Testdaten für den Integration-Test.
 Lädt nur Piper TTS (CPU/ONNX) — kein VRAM-Konflikt mit laufendem Übersetzer.
 
-Ausgabe: test_data/*.wav  (8 kHz, 16-bit mono)
+Ausgabe: test_data/*.wav  (16 kHz, 16-bit mono — matches AudioSocket slin16)
 """
 import io, os, sys, wave
 from pathlib import Path
@@ -13,7 +13,7 @@ import soundfile as sf
 from scipy import signal as sp
 
 PIPER_MODELS_DIR = "/home/gh/python/translator/piper_models"
-SR_AS            = 8000
+SR_AS            = 16000
 OUT_DIR          = Path(__file__).parent / "test_data"
 
 PIPER_VOICES = {

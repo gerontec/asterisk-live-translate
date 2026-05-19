@@ -76,8 +76,8 @@ SPEECH_MIN = 8
 INFER_RETRIES   = 3
 INFER_RETRY_S   = 1.0
 
-TRUNK    = os.environ.get("TEST_TRUNK", "PJSIP/%s@fritzbox-out")
-CALLERID = "linuxsip <+4980425641873>"
+TRUNK    = os.environ.get("TEST_TRUNK", "Local/%s@outbound-fallback")
+CALLERID = "+4980425659959 <+4980425659959>"
 
 AMI_HOST = os.environ.get("AMI_HOST", "127.0.0.1")
 AMI_PORT = int(os.environ.get("AMI_PORT", 5038))
@@ -416,13 +416,19 @@ class Worker:
             log.warning(f"[{self.label}] queue full — segment dropped (skip={self.segments_skip})")
 
     async def run(self) -> None:
+        _silence = struct.pack(">BH", AS_AUDIO, FRAME_B8) + b"\x00" * FRAME_B8
         while True:
-            # FIX: Timeout auf Queue.get() damit Worker bei HANGUP sauber endet
             try:
-                pcm = await asyncio.wait_for(self._q.get(), timeout=5.0)
+                pcm = await asyncio.wait_for(self._q.get(), timeout=1.0)
             except asyncio.TimeoutError:
                 if self.sess.state in (CallState.HANGUP, CallState.DONE, CallState.ERROR):
                     log.debug(f"[{self.label}] worker exiting (state={self.sess.state.name})")
+                    return
+                # keepalive: prevent Asterisk AudioSocket 2s inactivity timeout
+                try:
+                    self.w.write(_silence)
+                    await self.w.drain()
+                except Exception:
                     return
                 continue
             except asyncio.CancelledError:

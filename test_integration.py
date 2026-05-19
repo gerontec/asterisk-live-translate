@@ -37,12 +37,12 @@ AS_PORT  = 9093
 REG_HOST = "127.0.0.1"
 REG_PORT = 9094
 
-SR_AS    = 8000
-FRAME_B  = 320        # 160 samples × 2 bytes  (slin16 8kHz 20ms)
+SR_AS    = 16000
+FRAME_B  = 640        # 320 samples × 2 bytes  (slin16 16kHz 20ms)
 FRAME_S  = 0.020      # Sekunden pro Frame
 
 TEST_DATA      = Path(__file__).parent / "test_data"
-LOOPBACK_EXTEN = "3939"   # dial_number="39", len=2 ≤ 2 → loopback DE→IT
+LOOPBACK_EXTEN = "3333"   # dial_number="33", len=2 ≤ 2 → loopback DE→FR
 
 TEST_CASES = [
     ("q1_de", "Wie geht es Ihnen heute?"),
@@ -78,7 +78,7 @@ def _http_register(uid: str, exten: str) -> bool:
 
 
 def _http_nlu(path: str) -> str:
-    body = json.dumps({"path": path, "lang": "it"}).encode()
+    body = json.dumps({"path": path, "lang": "fr"}).encode()
     try:
         conn = http.client.HTTPConnection(REG_HOST, REG_PORT, timeout=30)
         conn.request("POST", "/nlu", body=body,
@@ -194,12 +194,12 @@ async def run_case(num: int, wav_name: str, phrase: str) -> bool:
         print(f"  FAIL — keine Audio-Antwort")
         return False
 
-    rx_path = f"/tmp/test_rx_it_case{num}.wav"
+    rx_path = str(TEST_DATA / f"test_rx_fr_case{num}.wav")
     _save_wav(rx_path, rx_frames)
 
     loop = asyncio.get_running_loop()
     it_text = await loop.run_in_executor(None, _http_nlu, rx_path)
-    print(f"  IT-TTS-Inhalt: {it_text!r}")
+    print(f"  FR-TTS-Inhalt: {it_text!r}")
 
     ok = bool(it_text.strip()) and "(Fehler" not in it_text
     print(f"  {'PASS ✓' if ok else 'FAIL ✗ — leere oder fehlerhafte Transkription'}")
@@ -208,7 +208,7 @@ async def run_case(num: int, wav_name: str, phrase: str) -> bool:
 
 async def main() -> int:
     print("=" * 60)
-    print("Integration-Test: DE→IT DirectAudioSocket")
+    print("Integration-Test: DE→FR DirectAudioSocket")
     print("=" * 60)
 
     if not TEST_DATA.exists() or not any(TEST_DATA.glob("q*_de.wav")):
