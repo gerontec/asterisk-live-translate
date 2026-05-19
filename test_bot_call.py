@@ -37,7 +37,7 @@ AMI_HOST   = os.environ.get("AMI_HOST", "127.0.0.1")
 AMI_PORT   = int(os.environ.get("AMI_PORT", 5038))
 AMI_USER   = os.environ.get("AMI_USER", "admin")
 AMI_PASS   = os.environ.get("AMI_PASS", "")
-TRUNK      = os.environ.get("TRUNK_OUT", "PJSIP/%s@vsip-trunk")
+TRUNK      = os.environ.get("TRUNK_OUT", "Local/%s@outbound-fallback")
 CALLER_ID  = os.environ.get("CALLER_ID", "+4980425659959")
 VSIP_DOMAIN = os.environ.get("VSIP_DOMAIN", "i.vsip.eu")
 
