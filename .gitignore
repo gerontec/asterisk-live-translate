@@ -5,3 +5,9 @@ piper_models/
 .asterisk-secrets
 *.log
 /tmp/
+
+# Telegram live-translate frontend
+tg_credentials.py
+*.session
+*.session-journal
+native/
