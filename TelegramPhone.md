@@ -65,11 +65,32 @@ exists only in unreleased dev branches. The one library purpose-built for
 See `build_tgvoip.sh` for the exact recipe; it produces
 `native/_tgvoip*.so` + `native/libtgvoip.a`.
 
+## Two modes
+
+* **Echo (incoming)** — `telegram_translate_bot.py`: answers incoming calls; the
+  caller speaks German and hears English echoed back. One party. Demo/announce use.
+* **Interpreter (outgoing, bidirectional)** — `telegram_interpreter.py`: the bot
+  **calls any Telegram target** and you are a live party at the device holding it:
+
+  ```
+  [dein Mikro DE] → STT(de)→de→en→TTS(en) → Telegram → Partner hört EN
+  [Partner EN]    → Telegram → STT(en)→en→de→TTS(de) → [dein Lautsprecher DE]
+  ```
+
+  Single call. Your German voice comes from the **local device mic**, the
+  translated German is played on the **local speaker** (`--audio sounddevice`);
+  `--audio files` streams a WAV in / writes one out for server-side logic tests.
+  The symmetric `Translator` (VAD→STT→MT→TTS) is reused for both directions; the
+  inference server already supports `de↔en` (Whisper multilingual, Piper `de`+`en`).
+
+  Run: `telegram_interpreter.py <@user|id|phone> [--audio sounddevice]`
+
 ## Files
 
 | File | Role |
 |------|------|
-| `telegram_translate_bot.py` | The bot: accepts calls, VAD, calls the inference server, plays the echo. |
+| `telegram_translate_bot.py` | Echo mode: accepts calls, VAD, inference server, plays the echo. |
+| `telegram_interpreter.py` | Interpreter mode: outgoing call, bidirectional DE↔EN, local mic/speaker. |
 | `build_tgvoip.sh`           | One-shot native build of `libtgvoip` + the `_tgvoip` extension. |
 | `voip_crypto.cpp`           | OpenSSL crypto glue for `libtgvoip` (`tgvoip::VoIPController::crypto`). |
 | `login.py`                  | One-time interactive Pyrogram login → `telegram_translate.session`. |

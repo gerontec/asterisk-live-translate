@@ -17,12 +17,12 @@ cd "$BASE"
 echo "== 1. Termux packages =="
 pkg update -y
 pkg install -y python clang make cmake git binutils libandroid-execinfo \
-               openssl libopus wget
+               openssl libopus wget portaudio
 
 echo "== 2. Python deps (Google-free stack) =="
 pip install --upgrade pip
 pip install "pyrogram==2.0.106" tgcrypto webrtcvad numpy scipy requests pybind11 \
-            piper-tts argostranslate
+            piper-tts argostranslate sounddevice   # sounddevice = local mic/speaker (interpreter mode)
 
 echo "== 3. pytgvoip source + GIL patch (binding only; libtgvoip.a is prebuilt) =="
 if [ ! -d pytgvoip ]; then
