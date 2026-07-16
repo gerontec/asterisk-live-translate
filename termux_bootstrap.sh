@@ -75,10 +75,20 @@ chmod +x "$AND/whisper/arm64-v8a/whisper-cli" || true
 
 cat <<EOF
 
-== Done. To run (two Termux sessions or use tmux) ==
-  export LD_LIBRARY_PATH=$AND/whisper/arm64-v8a:\$LD_LIBRARY_PATH
-  python $BASE/inference_server_ondevice.py        # local :9095
-  python $BASE/telegram_translate_bot.py           # INFER already 127.0.0.1:9095
+== Done. Everything runs ON THE TENSOR G3 — translation on-device, fully offline.
+   The partner is just a NORMAL Telegram client (no software needed there). ==
 
-First run of telegram_translate_bot.py will do the Telegram login (phone + code).
+Two Termux sessions (or tmux):
+  export LD_LIBRARY_PATH=$AND/whisper/arm64-v8a:\$LD_LIBRARY_PATH
+  python $BASE/inference_server_ondevice.py        # local :9095 (whisper.cpp+Argos+Piper)
+
+  # Bidirectional interpreter — the phone's mic/speaker are your side, you call anyone:
+  termux-microphone …  # grant mic permission once
+  python $BASE/telegram_interpreter.py <@user|id|phone> --audio sounddevice
+  #   INFER defaults to 127.0.0.1:9095 (on-device). You speak German into the phone,
+  #   the partner hears English; they speak English, you hear German.
+
+  # (Echo mode, incoming demo: python $BASE/telegram_translate_bot.py)
+
+First run does the Telegram login (phone + code).
 EOF

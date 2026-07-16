@@ -1,8 +1,15 @@
 # Portierung: Live-Übersetzungstelefon auf Pixel 8 (Tensor G3) — **GrapheneOS, on-device only**
 
-Ziel: das DE→EN-Echo-Telefon **komplett offline auf dem Pixel 8 unter GrapheneOS**.
-Kein Backend im Normalbetrieb; der Server (dell-3660) wird nur für das, was
-partout nicht aufs Gerät passt, hinzugezogen — Zielzustand ist **null**.
+Ziel: das Live-Dolmetscher-Telefon **komplett offline auf dem Pixel 8 unter
+GrapheneOS**. Die **Übersetzung läuft auf dem Tensor G3** selbst — kein Backend im
+Normalbetrieb (Zielzustand null; dell-3660 nur, falls etwas partout nicht aufs
+Gerät passt).
+
+**Betriebsmodus = bidirektionaler Dolmetscher** (`telegram_interpreter.py`): du
+hältst das Pixel, sprichst Deutsch ins Mikro, rufst einen beliebigen Partner an;
+der Partner nutzt einen **ganz normalen Telegram-Client** (keine Software nötig,
+z. B. der Poco als @GeorgHeiss) und hört Englisch, antwortet Englisch, du hörst
+Deutsch. Mikro/Lautsprecher = das Pixel; STT/MT/TTS = on-device.
 
 ## Kernfrage: gleiche Latenz & Pausenerkennung?
 

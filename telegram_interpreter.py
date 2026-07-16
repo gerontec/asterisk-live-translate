@@ -19,6 +19,7 @@ Aufruf:  telegram_interpreter.py <ziel>  [--audio sounddevice|files] …
 import argparse
 import io
 import logging
+import os
 import queue
 import threading
 import time
@@ -38,8 +39,10 @@ from tgvoip_pyrogram import VoIPService
 from tg_credentials import API_ID, API_HASH
 
 # ── Configuration ──────────────────────────────────────────────────
-SESSION = "/home/gh/python/telegram_translate/telegram_translate"
-INFER   = "http://[::1]:9095"
+SESSION = os.environ.get("TG_SESSION", "/home/gh/python/telegram_translate/telegram_translate")
+# On the Pixel/Tensor G3 the inference runs on-device (inference_server_ondevice.py)
+# → default localhost. For a dell-3660 test set INFER=http://[::1]:9095.
+INFER   = os.environ.get("INFER", "http://127.0.0.1:9095")
 SR_TG   = 48000
 SR_WORK = 16000
 DECIM   = SR_TG // SR_WORK
