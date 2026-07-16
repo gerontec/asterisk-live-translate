@@ -30,6 +30,11 @@ import webrtcvad
 from scipy import signal as sp
 
 from pyrogram import Client, idle
+# tgvoip_pyrogram was written for Pyrogram 1.x (client.send); on Pyrogram 2.x
+# (needed so Telegram allows login — 1.x is rejected with UPDATE_APP_TO_LOGIN)
+# the raw call is invoke(). Shim it back so tgvoip_pyrogram keeps working.
+if not hasattr(Client, "send"):
+    Client.send = Client.invoke
 from tgvoip_pyrogram import VoIPService
 
 from tg_credentials import API_ID, API_HASH
