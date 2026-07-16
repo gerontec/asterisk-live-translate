@@ -97,12 +97,12 @@ einfach die Ziffer wählen, Deutsch sprechen, das englische Echo hören:
 
 | Wählen | Backend | Inferenz | AudioSocket |
 |--------|---------|----------|-------------|
-| **`1`** | **Tesla P4** (GPU, dell) | Whisper medium + NLLB, `[::1]:9095` | `127.0.0.1:9098` |
-| **`2`** | **Tensor G3** (on-device, Pixel) | whisper.cpp `--translate` + espeak, `10.9.0.8:9095` (VPN) | `127.0.0.1:9100` |
+| **`201`** | **Tesla P4** (GPU, dell) | Whisper medium + NLLB, `[::1]:9095` | `127.0.0.1:9098` |
+| **`202`** | **Tensor G3** (on-device, Pixel) | whisper.cpp `--translate` + espeak, `10.9.0.8:9095` (VPN) | `127.0.0.1:9100` |
 
 Ablauf (beide identisch, nur INFER unterschiedlich):
 ```
-Linphone (DE) → Asterisk [pixel-out] exten 1|2 → AudioSocket 9098|9100
+Linphone (DE) → Asterisk [pixel-out] exten 201|202 → AudioSocket 9098|9100
    → audiosocket_echo.py (Translator: VAD→STT→MT→TTS, INFER=P4|G3)
    → englisches TTS zurück in denselben Call → du hörst das Echo
 ```
@@ -116,7 +116,7 @@ Linphone (DE) → Asterisk [pixel-out] exten 1|2 → AudioSocket 9098|9100
   `/translate` = Passthrough (schon EN), `/tts` = espeak-ng → 16 kHz WAV.
   Läuft in **tmux** (Android-Phantom-Process-Killer via adb deaktiviert),
   erreichbar von dell über WireGuard `10.9.0.8`.
-- Dialplan `[pixel-out]`: `exten => 1` (P4) / `exten => 2` (G3) → `AudioSocket`.
+- Dialplan `[pixel-out]`: `exten => 201` (P4) / `exten => 202` (G3) → `AudioSocket`.
 
 ### Verifikation (on-device G3)
 `/stt` „Wie geht es Ihnen heute?" → `{"chunks":["How is it going today?"]}` ✓ —
