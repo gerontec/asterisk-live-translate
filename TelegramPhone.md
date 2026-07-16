@@ -13,7 +13,7 @@ call signalling, a voice transport, and VAD segmentation.
 Telegram user (speaks German)
         │  MTProto private (1-to-1) voice call
         ▼
- telegram_translate_bot.py            (venv_tgcall · Pyrogram 1.4.16 userbot)
+ telegram_translate_bot.py            (venv_tgcall · Pyrogram 2.x userbot)
    ├── tgvoip_pyrogram  → call signalling (phone.requestCall / acceptCall, DH key)
    ├── libtgvoip (self-built) → Opus/SRTP voice transport, 48 kHz s16 mono
    ├── resample 48 kHz ⇄ 16 kHz       (everything is processed at 16 kHz)
@@ -30,9 +30,13 @@ Telegram user (speaks German)
 
 The heavy models (Whisper / NLLB / Piper) live in `venv_py311` and are shared
 with the Asterisk path via the HTTP inference server. The Telegram process runs
-in its **own** venv (`venv_tgcall`) because `pytgvoip` requires **Pyrogram 1.x**,
-while the rest of the project uses Pyrogram 2.x — the two never meet in one
-interpreter; they only talk over the 9095 HTTP API.
+in its **own** venv (`venv_tgcall`) that carries the self-built `_tgvoip`
+extension, `tgvoip_pyrogram`, and the realtime-audio deps — kept apart from the
+GPU/model venv; the two only talk over the 9095 HTTP API.
+
+`tgvoip_pyrogram` was written for **Pyrogram 1.x**, but Telegram now rejects
+1.x logins (`406 UPDATE_APP_TO_LOGIN`), so the bot runs on **Pyrogram 2.x** and
+shims the one renamed call it needs (`Client.send` → `Client.invoke`).
 
 ## Why a self-built voice stack
 
@@ -53,6 +57,10 @@ exists only in unreleased dev branches. The one library purpose-built for
   host's **OpenSSL 3.5** (only deprecation warnings for `AES_ige_encrypt`).
 * modern pip `pybind11` instead of the vendored 2019 copy (Python 3.11 opaque
   `PyFrameObject`).
+* a GIL-acquire patch (`build_tgvoip.sh` applies it): the audio callbacks fire on
+  libtgvoip's native thread, which doesn't hold the Python GIL — old pybind11
+  tolerated this, pybind11 ≥3 aborts, so a `py::gil_scoped_acquire` is injected
+  around each callback.
 
 See `build_tgvoip.sh` for the exact recipe; it produces
 `native/_tgvoip*.so` + `native/libtgvoip.a`.

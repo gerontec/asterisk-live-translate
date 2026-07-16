@@ -11,6 +11,17 @@ if [ ! -d "$PYT/3rdparty/libtgvoip" ]; then
 fi
 LIB=$PYT/3rdparty/libtgvoip
 SRC=$PYT/src
+
+# The audio callbacks run on libtgvoip's native audio thread, which does NOT hold
+# the Python GIL. Old pybind11 tolerated calling Python anyway; pybind11 >=3 aborts
+# (PyGILState_Check failure). Acquire the GIL around each Python-touching callback.
+if ! grep -q "gil_scoped_acquire _gil" "$SRC/_tgvoip.cpp"; then
+    echo ">>> patching _tgvoip.cpp: acquire GIL in audio callbacks ..."
+    sed -i \
+      -e 's|\(\s*\)char \*frame = this->_send_audio_frame_impl(|\1py::gil_scoped_acquire _gil;\n\1char *frame = this->_send_audio_frame_impl(|' \
+      -e 's|\(\s*\)std::string frame((const char \*) buf, sizeof(int16_t) \* size);|\1py::gil_scoped_acquire _gil;\n\1std::string frame((const char *) buf, sizeof(int16_t) * size);|' \
+      "$SRC/_tgvoip.cpp"
+fi
 # Use modern pip pybind11 (bundled 2019 copy is too old for Python 3.11+).
 PB=$(/home/gh/python/venv_tgcall/bin/python -c "import pybind11;print(pybind11.get_include())")
 OUT=${1:-/home/gh/python/telegram_translate/native}
