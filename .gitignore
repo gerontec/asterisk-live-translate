@@ -16,3 +16,10 @@ native/
 android/
 models/
 pytgvoip/
+
+# deployment secrets
+ddns_heissa.py
+*_wg.conf
+pixel.xml
+poco.xml
+pjsip_*.conf
