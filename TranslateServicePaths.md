@@ -89,3 +89,35 @@ resampled. Wideband bis zum Handset über G722/Opus.
 * ✅ WireGuard Pixel `10.9.0.8` ⇄ dell `10.9.0.6` (Hub ipgate1).
 * ⏳ Tensor-G3-Pfad: On-Device-Inferenz am Pixel deployen (Termux, cross-gebaute
   aarch64-Artefakte) + Gateway-Backend-Routing scharf schalten.
+
+## Test-Nebenstellen (Selbst-Echo: Deutsch sprechen → Englisch hören)
+
+Zum direkten Vergleich beider Inferenz-Pfade — vom SIP-Client (Linphone `pixel`)
+einfach die Ziffer wählen, Deutsch sprechen, das englische Echo hören:
+
+| Wählen | Backend | Inferenz | AudioSocket |
+|--------|---------|----------|-------------|
+| **`1`** | **Tesla P4** (GPU, dell) | Whisper medium + NLLB, `[::1]:9095` | `127.0.0.1:9098` |
+| **`2`** | **Tensor G3** (on-device, Pixel) | whisper.cpp `--translate` + espeak, `10.9.0.8:9095` (VPN) | `127.0.0.1:9100` |
+
+Ablauf (beide identisch, nur INFER unterschiedlich):
+```
+Linphone (DE) → Asterisk [pixel-out] exten 1|2 → AudioSocket 9098|9100
+   → audiosocket_echo.py (Translator: VAD→STT→MT→TTS, INFER=P4|G3)
+   → englisches TTS zurück in denselben Call → du hörst das Echo
+```
+
+### Komponenten
+- **`audiosocket_echo.py`** — generischer Selbst-Echo-AudioSocket-Server; Backend
+  per Env: `INFER` (P4 `http://[::1]:9095` / G3 `http://10.9.0.8:9095`) + `ECHO_PORT`.
+  Zwei Instanzen: 9098 = P4, 9100 = G3.
+- **`inference_server_g3.py`** — G3-Inferenz auf dem Pixel (Termux, `0.0.0.0:9095`):
+  `/stt` = whisper.cpp `--translate` (STT+MT DE→EN in einem Schritt),
+  `/translate` = Passthrough (schon EN), `/tts` = espeak-ng → 16 kHz WAV.
+  Läuft in **tmux** (Android-Phantom-Process-Killer via adb deaktiviert),
+  erreichbar von dell über WireGuard `10.9.0.8`.
+- Dialplan `[pixel-out]`: `exten => 1` (P4) / `exten => 2` (G3) → `AudioSocket`.
+
+### Verifikation (on-device G3)
+`/stt` „Wie geht es Ihnen heute?" → `{"chunks":["How is it going today?"]}` ✓ —
+STT **und** DE→EN-Übersetzung komplett auf dem Tensor G3 (whisper.cpp).
