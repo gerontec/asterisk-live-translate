@@ -92,6 +92,15 @@ Internal SIP extension (2-digit extension + language suffix):
 Endpoint `523523` routes directly via `fritzbox-out` without translation.
 For translated calls from an internal client, dial via the DID (mode 1).
 
+## Documentation
+
+| Document | Contents |
+|----------|----------|
+| `TranslateServicePaths.md` | Architecture, routing, echo extensions per language |
+| `SipE2eTest.md` | End-to-end test bot and latency measurement |
+| `AudioSocket16k.md` | **Patching Asterisk's AudioSocket to 16 kHz** — required, not upstream |
+| `TelegramPhone.md` | Telegram frontend |
+
 ## Files
 
 | File | Purpose |
@@ -101,6 +110,7 @@ For translated calls from an internal client, dial via the DID (mode 1).
 | `loopback_call.py` | Test script: outbound loopback call via AMI |
 | `asterisk_config.sh` | Save/apply Asterisk config (see below) |
 | `start_as.sh` | Start script with CUDA environment |
+| `sip_e2e_test.py` | End-to-end latency test: real SIP client → echo extension → wagodb (see `SipE2eTest.md`) |
 
 ## Asterisk configuration
 

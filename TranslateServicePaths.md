@@ -83,23 +83,64 @@ resampled. Wideband bis zum Handset über G722/Opus.
 * ✅ SIP-Nebenstellen `poco` & `pixel` registriert über VPN (stabil, drinnen+draußen).
 * ✅ WireGuard Pixel `10.9.0.8` ⇄ dell `10.9.0.6` (Hub ipgate1).
 
-## Test-Nebenstelle (Selbst-Echo: Deutsch sprechen → Englisch hören)
+## Echo-Test-Nebenstellen (Deutsch sprechen → Zielsprache hören)
 
-Vom SIP-Client (Linphone `pixel`) die Ziffer wählen, Deutsch sprechen, das
-englische Echo hören:
+Vom SIP-Client wählen, die deutsche Ansage abwarten, nach dem Beep einen
+deutschen Satz sprechen — die Übersetzung kommt in denselben Call zurück.
 
-| Wählen | Backend | Inferenz | AudioSocket |
-|--------|---------|----------|-------------|
-| **`201`** | **Tesla P4** (GPU, dell) | Whisper medium + NLLB, `[::1]:9095` | `127.0.0.1:9098` |
+**Schema: `20` + Ländervorwahl, durchgehend vierstellig.** Gleiche Länge heißt
+keine Mehrdeutigkeit beim Overlap-Dialing.
 
-Ablauf:
+| Nst. | Sprache | | Nst. | Sprache | | Nst. | Sprache |
+|------|---------|-|------|---------|-|------|---------|
+| `2049` | Deutsch¹ | | `2034` | Spanisch | | `2090` | Türkisch |
+| `2044` | Englisch | | `2030` | Griechisch | | `2091` | Hindi |
+| `2039` | Italienisch | | `2038` | Ukrainisch | | `2098` | Persisch |
+| `2033` | Französisch | | `2048` | Polnisch | | `2077` | Kasachisch |
+| `2007` | Russisch² | | `2055` | Portugiesisch | | `2995` | Georgisch² |
+| `2086` | Chinesisch | | | | | | |
+
+¹ DE→DE: transkribieren und vorlesen, prüft STT+TTS ohne Übersetzung. Erforderte
+den Eintrag `"49": "de"` in `SUFFIX_LANG` — die Tabelle kannte nur Zielsprachen.
+² Vorwahl 7 mit Null aufgefüllt bzw. dreistellige Vorwahl 995.
+
+`201` bleibt als Alias auf `2044` (Englisch) erhalten.
+
+### Wie die Sprachwahl funktioniert
+
+Der Dialplan registriert per AGI die Nummer **`1` + Vorwahl** (z. B. `139`):
+
 ```
-Linphone (DE) → Asterisk [pixel-out] exten 201 → AudioSocket 9098
-   → audiosocket_echo.py (Translator: VAD→STT→MT→TTS, INFER=P4)
-   → englisches TTS zurück in denselben Call → du hörst das Echo
+exten => 2039 → AGI(notifyuuid.py,${AS_UUID},139) → AudioSocket :9093
+                                          │└┴─ Suffix 39 → SUFFIX_LANG → "it"
+                                          └─── Rest "1", ≤2-stellig → LOOPBACK_ECHO
 ```
 
-### Komponenten
-- **`audiosocket_echo.py`** — Selbst-Echo-AudioSocket-Server; Backend per Env:
-  `INFER` (`http://[::1]:9095`) + `ECHO_PORT` (9098).
-- Dialplan `[pixel-out]`: `exten => 201` → `AudioSocket`.
+Der Translator liest die Zielsprache am **Suffix** und schaltet in den Loopback,
+weil die Restziffer höchstens zweistellig ist (`audiosocket_translator.py`:
+`if LOOPBACK_ECHO or not dial_number or len(dial_number) <= 2 …`).
+
+### Von außen über die Trunks
+
+Externe Anrufer landen in `[from-vodafone]` / `[from-dusnet]` / `[from-vsip]` und
+erreichen den Extension-Nummernplan **nicht**. Dort gilt die interne Kodierung
+direkt: DID wählen, die 4 s NLU-Aufnahme abwarten (schweigen), nach dem Beep
+**`1` + Vorwahl** tippen — also `139#` für Italienisch. `Set(LANG_SUFFIX=)` leert
+vorher den Sprach-Suffix, die getippten Ziffern gehen unverändert an den Translator.
+
+### Ansagen
+
+`/var/lib/asterisk/sounds/en/echotest<nst>.wav16`, erzeugt mit Piper über
+`/tts` (16 kHz). Der Dialplan wartet nach `Answer()` **eine Sekunde**, bevor er
+sie abspielt — vorher steht der RTP-Pfad nicht, und der Anfang verpufft.
+Beep: `beep.wav16` ebendort. Siehe `AudioSocket16k.md` zu `astdatadir` und
+fehlendem `format_gsm`.
+
+### Codec
+
+Endpoints und Trunks stehen auf `allow = g722,ulaw,alaw` mit
+`codec_prefs_incoming_offer = prefer:configured, …` — G.722 (16 kHz) zuerst,
+8 kHz nur als Rückfall. Ohne `prefer:configured` gewinnt die Präferenz des
+Anrufers, und Linphone wählt `ulaw`.
+
+Messungen: `SipE2eTest.md`.
