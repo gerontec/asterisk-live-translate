@@ -1,8 +1,8 @@
 #!/home/gh/python/venv_tgcall/bin/python3
-"""AudioSocket Selbst-Echo über den G3-Inferenz-Pfad.
+"""AudioSocket Selbst-Echo über den Tesla-P4-Inferenz-Pfad.
 Anrufer spricht Deutsch → hört das englische Echo. Nutzt die Translator-Klasse
-(VAD→STT→MT→TTS) mit INFER=G3 (Pixel, über VPN). Start:
-    INFER=http://10.9.0.8:9095 audiosocket_g3echo.py
+(VAD→STT→MT→TTS) mit der GPU-Inferenz auf dem dell-3660. Start:
+    INFER=http://[::1]:9095 audiosocket_echo.py
 Dialplan: Answer() + AudioSocket(<uuid>,127.0.0.1:9098)
 """
 import asyncio, logging, os, struct
@@ -13,7 +13,7 @@ import telegram_interpreter as TI          # INFER aus Env; Translator/Resamplin
 AS_UUID, AS_AUDIO, AS_HANGUP = 0x01, 0x10, 0xFF
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("ECHO_PORT", 9098))
-BACKEND = os.environ.get("BACKEND", "?")   # nur fürs Log (P4/G3)
+BACKEND = os.environ.get("BACKEND", "P4")  # nur fürs Log
 SR = 16000
 FRAME_B = SR * 20 // 1000 * 2              # 640 Bytes = 20 ms @16k
 
@@ -79,7 +79,7 @@ async def handle(reader, writer):
         writer.close(); return
     if t != AS_UUID:
         writer.close(); return
-    log.info(f"G3-Echo-Call {p.hex()[:12]}")
+    log.info(f"Echo-Call {p.hex()[:12]}")
     s = Session(writer)
     await asyncio.gather(s.reader(reader), s.writer())
     try: writer.close()

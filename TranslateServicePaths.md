@@ -1,15 +1,11 @@
-# Zwei Übersetzungs-Pfade: Tesla P4 (GPU) & Tensor G3 (on-device)
+# Übersetzungs-Pfad: Tesla P4 (GPU, dell-3660)
 
-Das SIP↔Telegram-Gateway kann die Live-Übersetzung eines Anrufs auf **zwei
-verschiedenen Backends** rechnen — ausgewählt **pro SIP-Nebenstelle**:
+Das SIP↔Telegram-Gateway rechnet die Live-Übersetzung eines Anrufs auf der
+**Tesla P4** im dell-3660:
 
 | SIP-User | Backend | Wo | Modelle |
 |----------|---------|----|---------|
-| `pixel`  | **Tensor G3** | on-device auf dem Pixel 8 (`10.9.0.8:9095`) | whisper.cpp + Argos + Piper (aarch64) |
-| alle anderen (`poco`, …) | **Tesla P4** | GPU auf dell-3660 (`[::1]:9095`) | Whisper medium + NLLB-200 + Piper (CUDA) |
-
-Der **Tesla-P4-Pfad** läuft produktiv; der **Tensor-G3-Pfad** ist die
-On-Device-Variante für das Pixel (autark rechnen statt GPU).
+| `pixel`, `poco`, … | **Tesla P4** | GPU auf dell-3660 (`[::1]:9095`) | Whisper medium + NLLB-200 + Piper (CUDA) |
 
 ## Gesamtarchitektur
 
@@ -23,37 +19,37 @@ On-Device-Variante für das Pixel (autark rechnen statt GPU).
              ┌────────────────────┴─────┐              ┌──────────┴──────────────────┐
              │ Pixel 8  10.9.0.8         │              │ dell-3660  10.9.0.6          │
              │  Linphone (SIP-User pixel)│              │  Asterisk 22 (192.168.5.23)  │
-             │  + On-Device-Inferenz     │              │  + telegram_sip_gateway.py   │
-             │    (Tensor G3) :9095      │              │  + Tesla-P4-Inferenz :9095   │
+             │                           │              │  + telegram_sip_gateway.py   │
+             │                           │              │  + Tesla-P4-Inferenz :9095   │
              └───────────────────────────┘              │  + Schorsch (Telegram-Userbot)│
                                                         └──────────────────────────────┘
 
-Anruf-Fluss (beide Pfade identisch bis auf INFER):
+Anruf-Fluss:
   SIP-Client (DE) ──REGISTER/INVITE──► Asterisk (dell, über VPN 10.9.0.6)
-     dialplan  ──AGI notifyuuid_gw──► Gateway (uuid → Zielnummer + backend)
+     dialplan  ──AGI notifyuuid_gw──► Gateway (uuid → Zielnummer)
      Asterisk ──AudioSocket 16 kHz──► telegram_sip_gateway.py
         Gateway: STT(de)→de→en→TTS(en)  über INFER  → Schorsch ruft Ziel auf Telegram an → Partner hört EN
                  Partner EN → STT(en)→en→de→TTS(de) → AudioSocket → SIP-Client hört DE
 ```
 
-## Backend-Auswahl (Routing)
+## Routing
 
-Die Auswahl erfolgt über den **Dialplan-Kontext** der Nebenstelle:
+Die Nebenstellen laufen über ihren **Dialplan-Kontext** ins Gateway:
 
-* Endpoint `pixel`  → context **`pixel-out`**      → Gateway nutzt `INFER = http://[10.9.0.8]:9095` (Tensor G3)
-* Endpoint `poco`/… → context **`telegram-gateway`** → Gateway nutzt `INFER = http://[::1]:9095` (Tesla P4)
+* Endpoint `pixel`  → context **`pixel-out`**
+* Endpoint `poco`/… → context **`telegram-gateway`**
 
-Der AGI `notifyuuid_gw.py` registriert pro Anruf `uuid → (Zielnummer, backend)`
-beim Gateway (HTTP `:9097`); das Gateway wählt daraufhin den Inferenz-Endpunkt.
-Beide Kontexte reichen die Audio per `AudioSocket(…,127.0.0.1:9096)` ins Gateway.
+Das Gateway nutzt `INFER = http://[::1]:9095` (Tesla P4).
+
+Der AGI `notifyuuid_gw.py` registriert pro Anruf `uuid → Zielnummer` beim Gateway
+(HTTP `:9097`). Beide Kontexte reichen die Audio per `AudioSocket(…,127.0.0.1:9096)`
+ins Gateway.
 
 ## Warum das VPN (WireGuard über ipgate1)
 
-Beide Pfade brauchen stabile, überall erreichbare Adressen — besonders der
-G3-Pfad, weil **dell → Pixel** eingehend verbinden muss (Mobilfunk firewallt
-Inbound). WireGuard über ipgate1 löst auf einen Schlag:
+Die Nebenstellen brauchen stabile, überall erreichbare Adressen. WireGuard über
+ipgate1 löst auf einen Schlag:
 
-* **LTE-Inbound-Firewall** — Pixel ist als `10.9.0.8` immer erreichbar
 * **dynamischer IPv6-Präfix** zuhause — VPN-IP bleibt konstant
 * **Fritzbox-DNS-Rebind** — VPN-IP ist nicht „lokal", kein Block
 * **WiFi vs. LTE** — eine Config für überall
@@ -66,11 +62,10 @@ nicht die per DHCP wechselnde IPv4.
 | Datei / Dienst | Ort | Aufgabe |
 |----------------|-----|---------|
 | `telegram_sip_gateway.py` | dell | AudioSocket-Server (9096) + Register (9097) + Schorsch-Userbot; Bridge SIP↔Telegram mit Übersetzung |
-| `notifyuuid_gw.py` (AGI) | dell `/usr/share/asterisk/agi-bin` | registriert `uuid→Zielnummer` (+backend) beim Gateway |
-| `inference_server_ondevice.py` | Pixel (Termux) | Tensor-G3-Inferenz (`/stt /translate /tts`, 16 kHz) — whisper.cpp + Argos + Piper |
+| `notifyuuid_gw.py` (AGI) | dell `/usr/share/asterisk/agi-bin` | registriert `uuid→Zielnummer` beim Gateway |
 | `inference_server.py` | dell (`venv_py311`, systemd) | Tesla-P4-Inferenz (Whisper medium + NLLB + Piper, CUDA) |
 | Asterisk pjsip `[pixel]`, `[poco]` | dell `/etc/asterisk/pjsip.conf` | SIP-Nebenstellen (Auth/AOR/Endpoint), Registrierung über VPN |
-| Dialplan `[pixel-out]`, `[telegram-gateway]` | dell `extensions_translator.conf` | Routing pro User zum jeweiligen Backend |
+| Dialplan `[pixel-out]`, `[telegram-gateway]` | dell `extensions_translator.conf` | Routing zum Gateway |
 | WireGuard `wg0` | ipgate1 | VPN-Hub; Peers dell `10.9.0.6`, Pixel `10.9.0.8` |
 
 > Secrets (SIP-Passwörter, netcup/WireGuard-Keys, `tg_credentials.py`,
@@ -87,37 +82,24 @@ resampled. Wideband bis zum Handset über G722/Opus.
 * ✅ Tesla-P4-Pfad produktiv (GPU-Inferenz, Gateway, Schorsch).
 * ✅ SIP-Nebenstellen `poco` & `pixel` registriert über VPN (stabil, drinnen+draußen).
 * ✅ WireGuard Pixel `10.9.0.8` ⇄ dell `10.9.0.6` (Hub ipgate1).
-* ⏳ Tensor-G3-Pfad: On-Device-Inferenz am Pixel deployen (Termux, cross-gebaute
-  aarch64-Artefakte) + Gateway-Backend-Routing scharf schalten.
 
-## Test-Nebenstellen (Selbst-Echo: Deutsch sprechen → Englisch hören)
+## Test-Nebenstelle (Selbst-Echo: Deutsch sprechen → Englisch hören)
 
-Zum direkten Vergleich beider Inferenz-Pfade — vom SIP-Client (Linphone `pixel`)
-einfach die Ziffer wählen, Deutsch sprechen, das englische Echo hören:
+Vom SIP-Client (Linphone `pixel`) die Ziffer wählen, Deutsch sprechen, das
+englische Echo hören:
 
 | Wählen | Backend | Inferenz | AudioSocket |
 |--------|---------|----------|-------------|
 | **`201`** | **Tesla P4** (GPU, dell) | Whisper medium + NLLB, `[::1]:9095` | `127.0.0.1:9098` |
-| **`202`** | **Tensor G3** (on-device, Pixel) | whisper.cpp `--translate` + espeak, `10.9.0.8:9095` (VPN) | `127.0.0.1:9100` |
 
-Ablauf (beide identisch, nur INFER unterschiedlich):
+Ablauf:
 ```
-Linphone (DE) → Asterisk [pixel-out] exten 201|202 → AudioSocket 9098|9100
-   → audiosocket_echo.py (Translator: VAD→STT→MT→TTS, INFER=P4|G3)
+Linphone (DE) → Asterisk [pixel-out] exten 201 → AudioSocket 9098
+   → audiosocket_echo.py (Translator: VAD→STT→MT→TTS, INFER=P4)
    → englisches TTS zurück in denselben Call → du hörst das Echo
 ```
 
 ### Komponenten
-- **`audiosocket_echo.py`** — generischer Selbst-Echo-AudioSocket-Server; Backend
-  per Env: `INFER` (P4 `http://[::1]:9095` / G3 `http://10.9.0.8:9095`) + `ECHO_PORT`.
-  Zwei Instanzen: 9098 = P4, 9100 = G3.
-- **`inference_server_g3.py`** — G3-Inferenz auf dem Pixel (Termux, `0.0.0.0:9095`):
-  `/stt` = whisper.cpp `--translate` (STT+MT DE→EN in einem Schritt),
-  `/translate` = Passthrough (schon EN), `/tts` = espeak-ng → 16 kHz WAV.
-  Läuft in **tmux** (Android-Phantom-Process-Killer via adb deaktiviert),
-  erreichbar von dell über WireGuard `10.9.0.8`.
-- Dialplan `[pixel-out]`: `exten => 201` (P4) / `exten => 202` (G3) → `AudioSocket`.
-
-### Verifikation (on-device G3)
-`/stt` „Wie geht es Ihnen heute?" → `{"chunks":["How is it going today?"]}` ✓ —
-STT **und** DE→EN-Übersetzung komplett auf dem Tensor G3 (whisper.cpp).
+- **`audiosocket_echo.py`** — Selbst-Echo-AudioSocket-Server; Backend per Env:
+  `INFER` (`http://[::1]:9095`) + `ECHO_PORT` (9098).
+- Dialplan `[pixel-out]`: `exten => 201` → `AudioSocket`.

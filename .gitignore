@@ -12,7 +12,7 @@ tg_credentials.py
 *.session-journal
 native/
 
-# Pixel 8 / GrapheneOS on-device build artifacts (aarch64 binaries, models)
+# Build-Artefakte und Modelle (nicht ins Git)
 android/
 models/
 pytgvoip/
