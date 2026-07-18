@@ -1,4 +1,4 @@
-#!/home/gh/python/venv_py311/bin/python3
+#!/opt/translator-venv/bin/python3
 """
 SIP Translation B2BUA via AudioSocket — Asterisk 22
 ====================================================
@@ -61,8 +61,8 @@ AS_PORT   = 9093
 REG_HOST  = "127.0.0.1"
 REG_PORT  = 9094
 
-INFER_HOST = "127.0.0.1"
-INFER_PORT = 9095
+INFER_HOST = os.environ.get("INFER_HOST", "127.0.0.1")
+INFER_PORT = int(os.environ.get("INFER_PORT", 9095))
 
 SR_AS     = 16000   # SLIN16 (patched AudioSocket — see README)
 FRAME_MS  = 20
@@ -85,6 +85,8 @@ AMI_USER = os.environ.get("AMI_USER", "admin")
 AMI_PASS = os.environ.get("AMI_PASS", "")
 
 SUFFIX_LANG = {
+    # "49" = de: Quell- und Zielsprache Deutsch (Echo-Test 249, STT+TTS ohne Uebersetzung)
+    "49":  "de",
     "1":   "en",  "7":   "ru",  "30":  "el",  "33":  "fr",
     "34":  "es",  "38":  "uk",  "39":  "it",  "44":  "en",
     "48":  "pl",  "55":  "pt",  "77":  "kk",  "86":  "zh",
@@ -780,12 +782,15 @@ async def handle_inbound(uuid: str, reader: asyncio.StreamReader, writer: asynci
 
     sess.transition(CallState.REGISTERED, f"exten={exten}")
     sess.exten = exten
-    matched_suffix = next(
-        (s for s in sorted(SUFFIX_LANG, key=len, reverse=True) if exten.endswith(s)),
-        None
-    )
-    remote_lang = SUFFIX_LANG[matched_suffix] if matched_suffix else "it"
-    dial_number = exten[:-len(matched_suffix)] if matched_suffix else exten
+    if "~" in exten:
+        dial_number, remote_lang = exten.rsplit("~", 1)
+    else:
+        matched_suffix = next(
+            (s for s in sorted(SUFFIX_LANG, key=len, reverse=True) if exten.endswith(s)),
+            None
+        )
+        remote_lang = SUFFIX_LANG[matched_suffix] if matched_suffix else "it"
+        dial_number = exten[:-len(matched_suffix)] if matched_suffix else exten
     sess.remote_lang = remote_lang
     sess.dial_number = dial_number
 
