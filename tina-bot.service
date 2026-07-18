@@ -1,0 +1,17 @@
+[Unit]
+Description=Tina EN Test-Bot (SIP-Nebenstelle 9494, baresip)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gh
+Environment=TINA_PASS=CHANGEME
+WorkingDirectory=/home/gh/python/translator
+ExecStartPre=-/usr/bin/pkill -f "baresip.*tina_" 
+ExecStart=/usr/bin/python3 /home/gh/python/translator/tina_bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

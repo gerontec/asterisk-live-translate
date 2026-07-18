@@ -120,8 +120,8 @@ def callerid_to_lang(callerid: str) -> str:
     return "de"
 
 LOCAL_DIDS  = {"+4980424967"}
-SAVE_DE_WAV = "/home/gh/python/gh_de_in.wav"
-SAVE_IT_WAV = "/home/gh/python/gh_voip_in.wav"
+SAVE_DE_WAV = "/var/lib/asterisk/rec/last_de_bot.wav"
+SAVE_IT_WAV = "/var/lib/asterisk/rec/last_remote_orig.wav"
 LOOPBACK_ECHO = os.getenv("TRANSLATOR_LOOPBACK", "0") == "1"
 
 
@@ -581,6 +581,11 @@ async def recv_loop(
         session.fail(f"{side} recv_loop: {e}")
     finally:
         stop.set()
+        try:
+            if rec:
+                save_wav(wav_path, rec)
+        except Exception:
+            pass
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -605,9 +610,11 @@ async def ami_originate(number: str, partner_uuid: str, session: CallSession) ->
         pass
     w.write((
         f"Action: Originate\r\n"
-        f"Channel: {TRUNK % number}\r\n"
-        f"Application: AudioSocket\r\n"
-        f"Data: {partner_uuid},{AS_HOST}:{AS_PORT}\r\n"
+        f"Channel: {('PJSIP/'+number) if (number.isdigit() and len(number)<=5) else (TRUNK % number)}\r\n"
+        f"Context: audiosocket-out\r\n"
+        f"Exten: s\r\n"
+        f"Priority: 1\r\n"
+        f"Variable: PARTNER_UUID={partner_uuid}\r\n"
         f"CallerID: {CALLERID}\r\n"
         f"Timeout: 60000\r\nAsync: true\r\n\r\n"
     ).encode())
