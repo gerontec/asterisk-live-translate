@@ -35,7 +35,7 @@ INFER_BIND = os.environ.get("INFER_BIND", "::")
 SR_AS = 16000   # AudioSocket SLIN16
 SR_WH = 16000   # Whisper float32 16 kHz
 
-NLLB_MODEL = "facebook/nllb-200-distilled-1.3B"
+NLLB_MODEL = "facebook/nllb-200-distilled-600M"
 NLLB_CACHE = os.path.join(os.path.dirname(__file__), "nllb_cache")
 NLLB_LANG: dict[str, str] = {
     "de": "deu_Latn", "en": "eng_Latn", "fr": "fra_Latn", "it": "ita_Latn",
