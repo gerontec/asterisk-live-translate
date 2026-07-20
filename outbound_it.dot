@@ -1,0 +1,42 @@
+digraph outbound_it {
+  rankdir=TB;
+  bgcolor="white";
+  fontname="DejaVu Sans";
+  labelloc="t"; fontsize=19;
+  label=<<b>Outbound-Übersetzungscall — Linphone (DE) ruft +39… Italien (IT)</b><br/><font point-size="11" color="#555">SIP-Nebenstelle → Asterisk → vsip-Trunk → Partner · Live-Übersetzung über Port 9095</font>>;
+  node [shape=box, style="rounded,filled", fontname="DejaVu Sans", fontsize=11, color="#3a4550", fillcolor="white", margin="0.18,0.11"];
+  edge [fontname="DejaVu Sans Mono", fontsize=9, color="#3a4550", fontcolor="#33404b"];
+
+  // Endpunkte
+  linphone [label=<<b>Linphone</b> · SIP-Nebenstelle<br/><font point-size="9" color="#0b5cad">spricht &amp; hört DEUTSCH</font>>, color="#0b5cad", fillcolor="#e7f0fb"];
+  partner  [label=<<b>Partner in Italien</b> · +39…<br/><font point-size="9" color="#1e7a34">spricht &amp; hört ITALIENISCH</font>>, color="#1e7a34", fillcolor="#e6f4ea"];
+
+  // ipgate1
+  subgraph cluster_ip {
+    label=<<b>ipgate1</b>>; fontsize=12; style="rounded,filled"; fillcolor="#f4f6f9"; color="#8894a1"; margin=14;
+
+    asterisk [label=<<b>Asterisk</b> · Dialplan<br/><font point-size="9" color="#555">exten _+X. → LANG_CODE=39 (it)<br/>AS_EXTEN = +39…~it · slin16</font>>];
+    translator [label=<<b>audiosocket_translator.py</b><br/><font point-size="9" color="#555">AudioSocket :9093 · 2 Beine (Caller+Partner)<br/>DE↔IT Bridge · VAD · AMI</font>>, color="#0d7a84", fillcolor="#eaf5f6"];
+    vsip [label=<<b>PJSIP/vsip-trunk</b><br/><font point-size="9" color="#555">i.vsip.eu · outbound_auth</font>>, color="#8894a1", fillcolor="#eef1f4"];
+  }
+
+  // GPU-Dienst
+  infer [label=<<b>inference_server.py</b> · <font color="#a86300">Port 9095 zugeschaltet</font><br/><font point-size="9" color="#555">yt6.heissa.de:9095 (Tesla P4)<br/>Whisper · NLLB · Piper · Keep-Alive</font>>, color="#a86300", fillcolor="#fbf1df", penwidth=1.6];
+
+  // ── Signalisierung / Aufbau ──
+  linphone   -> asterisk   [label="  ① INVITE +39xxx  "];
+  asterisk   -> translator [label="  ② Caller-Bein\l  AudioSocket 127.0.0.1:9093\l"];
+  translator -> vsip       [label="  ③ AMI Originate\l  Dial(PJSIP/vsip-trunk)\l"];
+  vsip       -> partner    [label="  ④ SIP → i.vsip.eu → Italien  "];
+  partner    -> translator [label="  ⑤ Partner-Bein\l  audiosocket-out :9093\l", style=dashed, color="#1e7a34", fontcolor="#1e7a34"];
+  translator -> infer      [label="  ⑥ STT · Übersetzung · TTS\l  HTTP :9095 (persistent)\l", dir=both, color="#a86300", fontcolor="#8a5200", penwidth=1.6];
+
+  // ── Sprachrichtungen (der Kern) ──
+  richtung [shape=note, fontname="DejaVu Sans", fontsize=10, fillcolor="#fffdf5", color="#a86300",
+    label=<<b>Live-Übersetzung (bidirektional)</b><br align="left"/>
+      <font color="#0b5cad">▶ Hinweg:</font> Linphone <b>DE</b> → STT(de) → NLLB de→it → TTS(it) → Partner hört <b>Italienisch</b><br align="left"/>
+      <font color="#1e7a34">◀ Rückweg:</font> Partner <b>IT</b> → STT(it) → NLLB it→de → TTS(de) → Linphone hört <b>Deutsch</b> (Feedback)<br align="left"/>>];
+
+  // Richtungs-Note unter den Translator (ohne rank-Hack, damit Cluster intakt bleibt)
+  translator -> richtung [style=invis];
+}
