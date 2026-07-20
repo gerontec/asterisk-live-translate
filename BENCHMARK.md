@@ -87,6 +87,21 @@ Messung eines vollständigen Segments (`/stt`+`/translate`+`/tts`) von ipgate1, 
 
 (Einzel-Call auf einer Keep-Alive-Verbindung: req1 308 ms inkl. Handshake, req2+ ~168 ms.)
 
+## `/nlu`: Auto-Spracherkennung abgeschaltet (2026-07-20)
+
+`/nlu` erhält im Body bereits einen `lang`-Hint, transkribierte aber mit
+`language=None` → Whisper machte einen zusätzlichen **Auto-Detect-Vorpass**.
+Der Hint wird nun direkt durchgereicht (`language=lang or None`, Fallback
+Auto-Detect nur ohne Hint).
+
+| `/nlu` (lokal, n=12) | median |
+|---|--:|
+| vorher (`language=None`) | 1062 ms |
+| nachher (`language=lang`) | **617 ms** |
+| **Ersparnis** | **≈445 ms (~42 %)** |
+
+Ergebnis-Korrektheit unverändert (`{"number":"+49…","suffix":"44"}`).
+
 ## Nutzung
 
 ```bash

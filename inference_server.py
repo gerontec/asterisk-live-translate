@@ -575,8 +575,10 @@ async def _handle_nlu(body: bytes, writer: asyncio.StreamWriter) -> None:
         return
 
     def _run_nlu():
+        # lang-Hint direkt an Whisper durchreichen → spart den Auto-Detect-Vorpass.
+        # Fallback auf Auto-Detect nur, wenn kein Hint mitkam.
         segs_gen, info = _whisper.transcribe(
-            audio, language=None, beam_size=3,
+            audio, language=(lang or None), beam_size=3,
             vad_filter=True,
             no_speech_threshold=0.6,
             condition_on_previous_text=False,
