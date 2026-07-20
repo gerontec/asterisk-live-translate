@@ -73,7 +73,7 @@ def _stt(pcm16: bytes, lang: str) -> str:
     return " ".join(c.strip() for c in r.json().get("chunks", [])).strip()
 
 def _translate(text: str, src: str, tgt: str) -> str:
-    r = requests.post(f"{INFER}/translate", json={"text": text, "from": src, "to": tgt},
+    r = requests.post(f"{INFER}/translate", json={"text": text, "from": src, "to": tgt, "channel": "telegram"},
                       timeout=60); r.raise_for_status()
     return r.json().get("result", "")
 

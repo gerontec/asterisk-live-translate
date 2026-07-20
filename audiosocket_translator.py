@@ -151,6 +151,7 @@ class CallSession:
         self.remote_lang: str = ""
         self.dial_number: str = ""
         self.error:       str = ""
+        self.callerid:    str = ""   # Anrufer (für DB-Log src)
 
     def transition(self, new_state: CallState, info: str = "") -> None:
         old = self.state
@@ -169,7 +170,7 @@ class CallSession:
         self.transition(CallState.ERROR, reason)
         log.error(f"[{self.uuid[:8]}] ERROR in {self.state.name}: {reason}")
         # FIX: cleanup exten_map on error
-        _exten_map.pop(self.uuid, None)
+        _exten_map.pop(self.uuid, None); _caller_map.pop(self.uuid, None)
         _sessions.pop(self.uuid, None)
 
     def summary(self) -> str:
@@ -192,6 +193,7 @@ log = logging.getLogger("ast")
 
 # ── Global state ──────────────────────────────────────────────────
 _exten_map:   dict[str, str]              = {}
+_caller_map:  dict[str, str]              = {}   # uuid → CallerID (Anrufer)
 _out_waiters: dict[str, asyncio.Future]   = {}
 _sessions:    dict[str, CallSession]      = {}
 
@@ -273,13 +275,18 @@ async def _stt(pcm: bytes, lang: str) -> list[str]:
     return data.get("chunks", [])
 
 
-async def _translate(text: str, fl: str, tl: str) -> str:
+async def _translate(text: str, fl: str, tl: str, sess: "CallSession | None" = None) -> str:
+    caller = sess.callerid if sess else ""
+    callee = sess.exten    if sess else ""
+    uid    = sess.uuid     if sess else ""
     loop = asyncio.get_running_loop()
     data = await loop.run_in_executor(
         None,
         lambda: _infer_post_json_sync(
             "/translate",
-            json.dumps({"text": text, "from": fl, "to": tl}).encode(),
+            json.dumps({"text": text, "from": fl, "to": tl,
+                        "caller": caller, "callee": callee, "uniqueid": uid,
+                        "channel": "sip"}).encode(),
         ),
     )
     return data.get("result", text)
@@ -500,7 +507,7 @@ class Worker:
                             trans = await next_trans_task
                             next_trans_task = None
                         else:
-                            trans = await _translate(chunk, fl, tl)
+                            trans = await _translate(chunk, fl, tl, self.sess)
                         t_tr = time.monotonic() - t0
                         log.info(
                             f"[{self.label}] TRL[{i+1}/{len(chunks)}]({t_tr:.2f}s) "
@@ -521,7 +528,7 @@ class Worker:
                         if i + 1 < len(chunks):
                             next_ch = chunks[i + 1]
                             next_trans_task = asyncio.create_task(
-                                _translate(next_ch, fl, tl)
+                                _translate(next_ch, fl, tl, self.sess)
                             )
 
                         t_wr = time.monotonic()
@@ -724,7 +731,10 @@ async def _handle_register_body(body: bytes, writer: asyncio.StreamWriter) -> No
     exten = payload.get("exten", "").strip()
     if uid and exten:
         _exten_map[uid] = exten
-        log.info(f"[REG] uuid={uid[:8]} → exten={exten}")
+        cid = payload.get("callerid", "").strip()
+        if cid:
+            _caller_map[uid] = cid
+        log.info(f"[REG] uuid={uid[:8]} → exten={exten} callerid={cid or '-'}")
         writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
     else:
         _http_err(writer, 400, "ERR")
@@ -816,6 +826,7 @@ async def handle_inbound(uuid: str, reader: asyncio.StreamReader, writer: asynci
 
     sess.transition(CallState.REGISTERED, f"exten={exten}")
     sess.exten = exten
+    sess.callerid = _caller_map.get(uuid, "")
     if "~" in exten:
         dial_number, remote_lang = exten.rsplit("~", 1)
     else:
@@ -853,7 +864,7 @@ async def handle_inbound(uuid: str, reader: asyncio.StreamReader, writer: asynci
         )
         log.info(f"[Inbound] {sess.summary()}")
         # FIX: cleanup exten_map bei DONE
-        _exten_map.pop(uuid, None)
+        _exten_map.pop(uuid, None); _caller_map.pop(uuid, None)
         _sessions.pop(uuid, None)
         return
 
@@ -925,7 +936,7 @@ async def handle_inbound(uuid: str, reader: asyncio.StreamReader, writer: asynci
     )
     log.info(f"[Inbound] {sess.summary()}")
     # FIX: cleanup exten_map bei DONE
-    _exten_map.pop(uuid, None)
+    _exten_map.pop(uuid, None); _caller_map.pop(uuid, None)
     _sessions.pop(uuid, None)
 
 

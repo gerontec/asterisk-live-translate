@@ -13,7 +13,7 @@ Listens on port 9095 (localhost only).
 # import torch before ctranslate2/transformers (prevents PyTorch deactivation)
 import torch
 
-import asyncio, io, json, logging, logging.handlers, os, re, time, wave
+import asyncio, io, json, logging, logging.handlers, os, re, threading, time, wave
 from math import gcd as _gcd
 from typing import Any, Callable
 import warnings; warnings.filterwarnings("ignore", category=FutureWarning)
@@ -75,6 +75,50 @@ _stream_handler = logging.StreamHandler()
 _stream_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
 logging.basicConfig(level=logging.INFO, handlers=[_log_handler, _stream_handler])
 log = logging.getLogger("infer")
+
+# ── MariaDB-Logging (wagodb.ast_translate) ─────────────────────────
+_DB_CFG = dict(
+    host=os.environ.get("DB_HOST", "127.0.0.1"),
+    user=os.environ.get("DB_USER", "gh"),
+    password=os.environ.get("DB_PASS", "a12345"),
+    database=os.environ.get("DB_NAME", "wagodb"),
+    charset="utf8mb4", autocommit=True, connect_timeout=5,
+)
+try:
+    import pymysql
+    _db_lock = threading.Lock()
+    _db_conn = None
+    _db_ok = True
+    log.info("MariaDB-Logging aktiv (wagodb.ast_translate)")
+except Exception as _e:  # pragma: no cover
+    _db_ok = False
+    log.warning(f"pymysql nicht verfügbar — DB-Logging aus: {_e}")
+
+
+def _log_translation(uniqueid, src, dst, sourcetext, translatedtext,
+                     sip=0, telegram=0) -> None:
+    """Ein übersetztes Segment in wagodb.ast_translate schreiben (thread-safe, reconnect)."""
+    if not _db_ok:
+        return
+    global _db_conn
+    try:
+        with _db_lock:
+            if _db_conn is None:
+                _db_conn = pymysql.connect(**_DB_CFG)
+            else:
+                _db_conn.ping(reconnect=True)
+            with _db_conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO ast_translate "
+                    "(uniqueid, src, dst, sip, telegram, sourcetext, translatedtext) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (uniqueid or None, src or None, dst or None,
+                     int(bool(sip)), int(bool(telegram)),
+                     (sourcetext or "")[:512], (translatedtext or "")[:512]),
+                )
+    except Exception as e:
+        _db_conn = None  # Verbindung verwerfen → nächster Versuch reconnectet
+        log.warning(f"[DB] ast_translate insert failed: {e}")
 
 # ── GPU monitoring (pynvml, optional) ─────────────────────────────
 try:
@@ -565,6 +609,14 @@ async def _handle_translate(body: bytes, writer: asyncio.StreamWriter) -> None:
     t0     = time.monotonic()
     result = await _gpu_server.run(lambda: translate_sync(text, src, tgt))
     log.info(f"[/translate] {src}→{tgt}  ({time.monotonic()-t0:.2f}s)  {result!r}")
+    # MariaDB-Log (fire-and-forget) — nur wenn Call-Kontext (uniqueid/caller/callee) mitkam
+    caller = payload.get("caller"); callee = payload.get("callee"); uid = payload.get("uniqueid")
+    channel = (payload.get("channel") or "").lower()
+    sip = 1 if channel == "sip" else 0
+    telegram = 1 if channel == "telegram" else 0
+    if _db_ok and (uid or caller or callee):
+        asyncio.get_running_loop().run_in_executor(
+            None, _log_translation, uid, caller, callee, text, result, sip, telegram)
     _ok_json(writer, json.dumps({"result": result}).encode())
 
 
