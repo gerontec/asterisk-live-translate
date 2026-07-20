@@ -1,0 +1,49 @@
+digraph gpu_access {
+  rankdir=TB;
+  bgcolor="white";
+  fontname="DejaVu Sans";
+  labelloc="t";
+  fontsize=20;
+  label=<<b>Wie Asterisk auf ipgate1 den GPU-Service erreicht</b><br/><font point-size="11" color="#555555">Call-Media-Pfad · verifiziert 2026-07-20 · GPU = yt6.heissa.de (dell-3660, Tesla P4)</font>>;
+  node [shape=box, style="rounded,filled", fontname="DejaVu Sans", fontsize=11, color="#3a4550", fillcolor="white", margin="0.18,0.10"];
+  edge [fontname="DejaVu Sans Mono", fontsize=9, color="#3a4550", fontcolor="#33404b"];
+
+  // ── externer Anrufer ──
+  caller [label=<<b>Anrufer / SIP-Trunk</b><br/><font point-size="9" color="#555">chan_pjsip · SIP/RTP</font>>, style="rounded,dashed,filled", fillcolor="#f4f6f9"];
+
+  // ── Zone ipgate1 ──
+  subgraph cluster_ipgate1 {
+    label=<<b>ipgate1 — Asterisk-Host</b>  <font point-size="9" color="#0d7a84">keine GPU · alles auf 127.0.0.1</font>>;
+    fontname="DejaVu Sans"; fontsize=12; style="rounded,filled"; fillcolor="#eaf5f6"; color="#0d7a84"; margin=14;
+
+    asterisk [label=<<b>Asterisk 22 · Dialplan</b><br/><font point-size="9" color="#555">extensions_translator.conf<br/>AudioSocket(uuid, 127.0.0.1:9093)</font>>, color="#0d7a84"];
+    translator [label=<<b>audiosocket_translator.py</b><br/><font point-size="9" color="#555">AudioSocket-Server :9093 · HTTP-GW :9094<br/>AMI :5038 · VAD (webrtcvad)</font>>, color="#0d7a84"];
+    client [label=<<b>Inference-HTTP-Client</b><br/><font point-size="9" color="#555">http.client → INFER_HOST:9095<br/>POST /stt · /translate · /tts · Retry 3×</font>>, color="#0d7a84"];
+
+    asterisk -> translator [label="AudioSocket · TCP 9093\lSLIN16 16 kHz PCM\l"];
+    translator -> client [label="pro Sprach-Segment", style=dotted];
+  }
+
+  // ── Zone GPU ──
+  subgraph cluster_gpu {
+    label=<<b>yt6.heissa.de = dell-3660</b>  <font point-size="9" color="#a86300">GPU-Host</font>>;
+    fontname="DejaVu Sans"; fontsize=12; style="rounded,filled"; fillcolor="#fbf1df"; color="#a86300"; margin=14;
+
+    server [label=<<b>inference_server.py</b><br/><font point-size="9" color="#555">HTTP · LISTEN [::]:9095 (+10.9.0.6 WG)</font>>, color="#a86300"];
+    pipe [label=<<b>STT → Übersetzung → TTS</b><br/><font point-size="9" color="#555">Whisper medium · NLLB-200 · Piper</font>>, color="#a86300"];
+    gpu [label=<<b>NVIDIA Tesla P4</b><br/><font point-size="9" color="#555">7680 MiB · CUDA</font>>, color="#a86300", fillcolor="#f6e6c9"];
+
+    server -> pipe [label="GPU-FIFO-Queue"];
+    pipe -> gpu [label="CUDA"];
+  }
+
+  caller -> asterisk [label="Call-Bein → Übersetzungs-Context"];
+
+  // ── der Netz-Hop ──
+  client -> server [penwidth=2.2, color="#6b7885", fontcolor="#33404b",
+    label="  Netz-Hop: public IPv6 (ens6)\l  http://yt6.heissa.de:9095\l  POST /stt /translate /tts\l"];
+
+  // ── Rückweg ──
+  server -> client [style=dashed, color="#a86300", constraint=false,
+    label="Antwort: {chunks}/{result}\l/tts → WAV → SLIN16\l"];
+}

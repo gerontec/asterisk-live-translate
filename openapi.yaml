@@ -1,0 +1,254 @@
+openapi: 3.0.3
+info:
+  title: Inference-Server API (Whisper STT + NLLB-200 + Piper TTS)
+  version: "1.0.0"
+  description: |
+    GPU-Inferenzdienst hinter der Asterisk-Live-Übersetzung, implementiert in
+    `inference_server.py` (asyncio-Rohsocket-HTTP, kein Web-Framework).
+
+    **Sicherheitshinweis:** Der Dienst besitzt **keine Authentifizierung** und prüft
+    die **HTTP-Methode nicht** (Routing nur über `path.startswith(...)`). Die laufende
+    Instanz lauscht auf `[::]:9095` und ist über öffentliches IPv6 erreichbar, obwohl
+    der Code-Docstring „localhost only" behauptet. Alle Operationen sind damit
+    unauthentifiziert nutzbar. Kein TLS.
+
+    **GPU-Scheduling:** Alle Endpunkte teilen sich **eine globale FIFO-Queue** – Jobs
+    werden serialisiert; parallele/große Anfragen verzögern latenzkritische Live-Calls.
+  contact:
+    name: gerontec/asterisk-live-translate
+
+servers:
+  - url: http://yt6.heissa.de:9095
+    description: Öffentliches IPv6 (dell-3660, Tesla P4) – ohne Auth erreichbar
+  - url: http://10.9.0.6:9095
+    description: WireGuard-intern (empfohlener Pfad)
+
+tags:
+  - name: stt
+    description: Speech-to-Text (Whisper medium, int8/CUDA)
+  - name: translate
+    description: Übersetzung (NLLB-200-distilled-600M)
+  - name: tts
+    description: Text-to-Speech (Piper)
+  - name: nlu
+    description: Rufnummer + Sprache aus einer serverseitigen Audiodatei
+
+paths:
+  /stt:
+    post:
+      tags: [stt]
+      summary: Rohes PCM transkribieren
+      description: |
+        Transkribiert rohe **SLIN16-PCM**-Samples (16 kHz, mono, 16-bit little-endian,
+        **kein** WAV-Header). Ergebnis satzweise gesplittet.
+        Hinweis: Es existiert keine Body-Größenobergrenze.
+      parameters:
+        - name: lang
+          in: query
+          required: false
+          description: Whisper-Sprachhinweis (ISO-639-1).
+          schema:
+            type: string
+            default: de
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+              description: Roher SLIN16-PCM-Stream (int16 LE, 16 kHz, mono).
+      responses:
+        "200":
+          description: Transkription
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SttResponse"
+        "400":
+          description: Leerer Body
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: Interner Fehler
+          content:
+            text/plain:
+              schema: { type: string, example: ERR }
+
+  /translate:
+    post:
+      tags: [translate]
+      summary: Text übersetzen
+      description: |
+        Übersetzt `text` von `from` nach `to`. Unbekannte Codes fallen auf
+        `deu_Latn`/`eng_Latn` zurück; `from == to` gibt den Text unverändert zurück.
+        Intern satzweise, `max_new_tokens=256` pro Satz.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TranslateRequest"
+      responses:
+        "200":
+          description: Übersetzung
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TranslateResponse"
+        "400":
+          description: Kein Text
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: Interner Fehler
+          content:
+            text/plain:
+              schema: { type: string, example: ERR }
+
+  /tts:
+    post:
+      tags: [tts]
+      summary: Text zu Sprache (WAV)
+      description: |
+        Synthetisiert `text` in `lang`. Rückgabe ist **WAV, 16 kHz, mono, 16-bit PCM**.
+        Unbekannte `lang` fällt auf die deutsche Stimme zurück.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TtsRequest"
+      responses:
+        "200":
+          description: WAV-Audio (16 kHz, mono, PCM16)
+          content:
+            audio/wav:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Kein Text
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: Interner Fehler
+          content:
+            text/plain:
+              schema: { type: string, example: ERR }
+
+  /nlu:
+    post:
+      tags: [nlu]
+      summary: Rufnummer + Sprache aus einer serverseitigen Audiodatei
+      description: |
+        Liest die Datei unter `path` **auf dem Server** (jedes von `soundfile`/libsndfile
+        dekodierbare Audioformat, wird auf 16 kHz gemischt), transkribiert per Whisper
+        (Auto-Spracherkennung) und extrahiert Zielrufnummer (E.164) + Länder-/Sprach-Suffix.
+
+        ⚠️ **Nebenwirkung:** Bei nicht-leerer Transkription wird die Datei mit
+        `os.unlink(path)` **gelöscht**. `path` ist client-kontrolliert → dient als
+        Datei-Existenz-Orakel und (für Audiodateien) als Inhalts-Exfiltration/Löschprimitiv.
+        Das `lang`-Feld wird gelesen, aber für die Transkription nicht verwendet.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NluRequest"
+      responses:
+        "200":
+          description: Extrahierte Wählinformation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NluResponse"
+        "400":
+          description: Pfad fehlt oder existiert nicht
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: WAV-Lesen fehlgeschlagen / interner Fehler
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+components:
+  schemas:
+    SttResponse:
+      type: object
+      required: [chunks]
+      properties:
+        chunks:
+          type: array
+          description: Satzweise Transkription.
+          items: { type: string }
+      example:
+        chunks: ["Hallo, wie geht es dir?"]
+
+    TranslateRequest:
+      type: object
+      required: [text]
+      properties:
+        text: { type: string, example: "Guten Morgen" }
+        from:
+          $ref: "#/components/schemas/LangCode"
+        to:
+          $ref: "#/components/schemas/LangCode"
+      description: "Defaults: from=de, to=it."
+
+    TranslateResponse:
+      type: object
+      required: [result]
+      properties:
+        result: { type: string, example: "Доброе утро" }
+
+    TtsRequest:
+      type: object
+      required: [text]
+      properties:
+        text: { type: string, example: "Buongiorno" }
+        lang:
+          allOf:
+            - $ref: "#/components/schemas/LangCode"
+          default: it
+
+    NluRequest:
+      type: object
+      required: [path]
+      properties:
+        path:
+          type: string
+          description: Absoluter Pfad einer Audiodatei **auf dem Server**.
+          example: "/tmp/prompt.wav"
+        lang:
+          type: string
+          default: de
+          description: Wird gelesen, aber für die Transkription nicht genutzt.
+
+    NluResponse:
+      type: object
+      required: [text, number, suffix]
+      properties:
+        text:   { type: string, description: Volltranskript. }
+        number: { type: string, description: "Zielrufnummer in E.164 (leer wenn nicht erkannt).", example: "+39012345678" }
+        suffix: { type: string, description: "Länder-/Sprach-Suffix fürs Routing (leer wenn nicht erkannt).", example: "39" }
+
+    LangCode:
+      type: string
+      description: Von NLLB & Piper unterstützte Sprachen (ISO-639-1).
+      enum: [de, en, fr, it, ru, es, el, pl, pt, uk, kk, zh, tr, hi, fa, ka]
+
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+      example: { error: "no text" }
+
+# Der Dienst implementiert keinerlei Authentifizierung.
+# Dieser Block dokumentiert nur die EMPFOHLENE Absicherung (derzeit nicht aktiv).
+security: []
