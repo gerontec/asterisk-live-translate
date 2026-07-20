@@ -69,7 +69,7 @@ FRAME_MS  = 20
 FRAME_S8  = SR_AS * FRAME_MS // 1000   # 320 samples @ 16 kHz
 FRAME_B8  = FRAME_S8 * 2               # 640 bytes / 20 ms
 
-SILENCE_FR = 15
+SILENCE_FR = 25   # 25 × 20 ms = 500 ms Pause bis Segment-Flush (weniger Satz-Zerhackung)
 SPEECH_MIN = 8
 
 # FIX: Inference-Retry-Konfiguration
