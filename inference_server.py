@@ -139,9 +139,15 @@ _nllb_model: AutoModelForSeq2SeqLM | None = None
 _piper_voices: dict[str, PiperVoice]      = {}
 _gpu_server: GpuInferenceServer
 
+# OPUS-MT DE->IT (Helsinki-NLP/opus-mt-de-it, ~75M, CPU) — aktiv für de->it
+# (Nebenstelle 2039). Präziser bei Fach-/Geschäftssprache als NLLB, latenzneutral.
+# NLLB bleibt Fallback und für alle anderen Sprachpaare zuständig.
+_opus_deit_tok = None
+_opus_deit_mdl = None
+
 
 def load_models() -> None:
-    global _whisper, _nllb_tok, _nllb_model
+    global _whisper, _nllb_tok, _nllb_model, _opus_deit_tok, _opus_deit_mdl
 
     log.info("Loading Whisper medium (CUDA, int8) ...")
     _whisper = WhisperModel("medium", device="cuda", compute_type="int8")
@@ -167,6 +173,17 @@ def load_models() -> None:
     _nllb_model.eval()
     vram = torch.cuda.memory_allocated() // 1024 // 1024
     log.info(f"NLLB ready  ({vram} MB VRAM)  {_gpu()}")
+
+    # OPUS-MT DE->IT (CPU) — aktiv für de->it (Nebenstelle 2039)
+    try:
+        from transformers import MarianMTModel, MarianTokenizer
+        log.info("Loading OPUS-MT de-it (CPU) ...")
+        _opus_deit_tok = MarianTokenizer.from_pretrained("Helsinki-NLP/opus-mt-de-it")
+        _opus_deit_mdl = MarianMTModel.from_pretrained("Helsinki-NLP/opus-mt-de-it")
+        _opus_deit_mdl.eval()
+        log.info("OPUS-MT de-it ready — aktiv fuer de->it (Nebenstelle 2039).")
+    except Exception as e:
+        log.warning(f"OPUS-MT de-it nicht geladen ({e}) — de->it nutzt weiter NLLB.")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -261,9 +278,22 @@ def _translate_one(text: str, src: str, tgt_id: int) -> str:
     return _nllb_tok.batch_decode(out, skip_special_tokens=True)[0]
 
 
+def _opus_deit_one(text: str) -> str:
+    ids = _opus_deit_tok([text], return_tensors="pt", padding=True)
+    with torch.no_grad():
+        out = _opus_deit_mdl.generate(**ids, max_new_tokens=256, num_beams=2)
+    return _opus_deit_tok.decode(out[0], skip_special_tokens=True)
+
+
 def translate_sync(text: str, fl: str, tl: str) -> str:
     if fl == tl:
         return text
+    # de->it (Nebenstelle 2039) über OPUS-MT, wenn geladen; sonst NLLB.
+    if fl == "de" and tl == "it" and _opus_deit_mdl is not None:
+        sentences = [s.strip() for s in _SENT_SPLIT_RE.split(text) if s.strip()]
+        if len(sentences) <= 1:
+            return _opus_deit_one(text)
+        return " ".join(_opus_deit_one(s) for s in sentences)
     src    = NLLB_LANG.get(fl, "deu_Latn")
     tgt_id = _nllb_tok.convert_tokens_to_ids(NLLB_LANG.get(tl, "eng_Latn"))
     sentences = [s.strip() for s in _SENT_SPLIT_RE.split(text) if s.strip()]
