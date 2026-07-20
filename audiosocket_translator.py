@@ -21,7 +21,7 @@ Fixes vs v2.0.0:
 """
 
 import asyncio, http.client, io, json, logging, logging.handlers
-import os, re, struct, subprocess, time, uuid as uuid_mod, wave, datetime
+import os, re, struct, subprocess, threading, time, uuid as uuid_mod, wave, datetime
 from pathlib import Path
 from typing import Any
 import warnings; warnings.filterwarnings("ignore", category=FutureWarning)
@@ -199,19 +199,44 @@ _sessions:    dict[str, CallSession]      = {}
 # ══════════════════════════════════════════════════════════════════
 # HTTP-Client → Inference-Server :9095  (mit Retry)
 # ══════════════════════════════════════════════════════════════════
+# Persistente Verbindung je Executor-Thread (Keep-Alive) — spart den TCP-Handshake
+# pro Infer-Call (~130 ms über den Netz-Hop). Bei Fehler wird sie verworfen + neu.
+_infer_tls = threading.local()
+
+
+def _infer_conn() -> http.client.HTTPConnection:
+    c = getattr(_infer_tls, "conn", None)
+    if c is None:
+        c = http.client.HTTPConnection(INFER_HOST, INFER_PORT, timeout=30)
+        _infer_tls.conn = c
+    return c
+
+
+def _infer_drop() -> None:
+    c = getattr(_infer_tls, "conn", None)
+    if c is not None:
+        try:
+            c.close()
+        except Exception:
+            pass
+        _infer_tls.conn = None
+
+
 def _infer_post_json_sync(path: str, body: bytes, content_type: str = "application/json") -> dict:
-    """Synchroner HTTP-POST mit Retry bei Verbindungsfehler."""
+    """Synchroner HTTP-POST mit Keep-Alive + Retry bei Verbindungsfehler."""
     last_exc: Exception | None = None
     for attempt in range(INFER_RETRIES):
         try:
-            conn = http.client.HTTPConnection(INFER_HOST, INFER_PORT, timeout=30)
+            conn = _infer_conn()
             conn.request("POST", path, body, {
                 "Content-Type":   content_type,
                 "Content-Length": str(len(body)),
+                "Connection":     "keep-alive",
             })
             return json.loads(conn.getresponse().read())
         except Exception as e:
             last_exc = e
+            _infer_drop()                 # stale/kaputte Verbindung verwerfen
             if attempt < INFER_RETRIES - 1:
                 log.warning(f"[INFER] {path} attempt {attempt+1} failed: {e} — retrying")
                 time.sleep(INFER_RETRY_S)
@@ -219,18 +244,20 @@ def _infer_post_json_sync(path: str, body: bytes, content_type: str = "applicati
 
 
 def _infer_post_raw_sync(path: str, body: bytes, content_type: str = "application/json") -> bytes:
-    """Synchroner HTTP-POST mit Retry, gibt rohe Bytes zurück."""
+    """Synchroner HTTP-POST mit Keep-Alive + Retry, gibt rohe Bytes zurück."""
     last_exc: Exception | None = None
     for attempt in range(INFER_RETRIES):
         try:
-            conn = http.client.HTTPConnection(INFER_HOST, INFER_PORT, timeout=30)
+            conn = _infer_conn()
             conn.request("POST", path, body, {
                 "Content-Type":   content_type,
                 "Content-Length": str(len(body)),
+                "Connection":     "keep-alive",
             })
             return conn.getresponse().read()
         except Exception as e:
             last_exc = e
+            _infer_drop()
             if attempt < INFER_RETRIES - 1:
                 log.warning(f"[INFER] {path} attempt {attempt+1} failed: {e} — retrying")
                 time.sleep(INFER_RETRY_S)

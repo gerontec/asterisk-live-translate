@@ -28,6 +28,9 @@ from transformers import NllbTokenizer, AutoModelForSeq2SeqLM
 # ── Configuration ──────────────────────────────────────────────────
 INFER_HOST = "127.0.0.1"
 INFER_PORT = 9095
+# Server-Bind: alle Interfaces (IPv6 dual-stack). Der Zugriff wird per
+# nftables-Whitelist (fw9095) auf dell beschränkt, nicht über die Bind-Adresse.
+INFER_BIND = os.environ.get("INFER_BIND", "::")
 
 SR_AS = 16000   # AudioSocket SLIN16
 SR_WH = 16000   # Whisper float32 16 kHz
@@ -446,6 +449,7 @@ def extract_dial_info(text: str) -> tuple[str, str]:
 def _ok_json(w: asyncio.StreamWriter, body: bytes) -> None:
     w.write(
         b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        b"Connection: keep-alive\r\n"
         + f"Content-Length: {len(body)}\r\n\r\n".encode()
         + body
     )
@@ -454,6 +458,7 @@ def _ok_json(w: asyncio.StreamWriter, body: bytes) -> None:
 def _ok_wav(w: asyncio.StreamWriter, body: bytes) -> None:
     w.write(
         b"HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\n"
+        b"Connection: keep-alive\r\n"
         + f"Content-Length: {len(body)}\r\n\r\n".encode()
         + body
     )
@@ -478,6 +483,8 @@ async def _read_request(reader: asyncio.StreamReader) -> tuple[str, dict[str, st
         if len(raw) > 65536:   # Header-Limit 64 KB
             raise ValueError("Header zu groß")
 
+    if b"\r\n\r\n" not in raw:
+        return None                       # EOF / Verbindung leer geschlossen (Keep-Alive)
     header_raw, body = raw.split(b"\r\n\r\n", 1)
     lines   = header_raw.decode(errors="replace").split("\r\n")
     headers = {}
@@ -598,28 +605,37 @@ async def _handle_nlu(body: bytes, writer: asyncio.StreamWriter) -> None:
 
 async def handle_http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     try:
-        path, qparams, body = await _read_request(reader)
-
-        if path.startswith("/stt"):
-            await _handle_stt(body, qparams.get("lang", "de"), writer)
-        elif path.startswith("/translate"):
-            await _handle_translate(body, writer)
-        elif path.startswith("/tts"):
-            await _handle_tts(body, writer)
-        elif path.startswith("/nlu"):
-            await _handle_nlu(body, writer)
-        else:
-            _err(writer, 404, "Not found")
-
-    except Exception as e:
-        log.warning(f"[HTTP] Fehler: {e}", exc_info=True)
-        try:
-            _err(writer, 500, "ERR")
-        except Exception:
-            pass
+        while True:                       # Keep-Alive: mehrere Requests je Verbindung
+            try:
+                req = await _read_request(reader)
+            except (asyncio.TimeoutError, ConnectionError,
+                    asyncio.IncompleteReadError):
+                break                     # Idle-Timeout / Verbindung weg
+            if req is None:               # EOF
+                break
+            path, qparams, body = req
+            try:
+                if path.startswith("/stt"):
+                    await _handle_stt(body, qparams.get("lang", "de"), writer)
+                elif path.startswith("/translate"):
+                    await _handle_translate(body, writer)
+                elif path.startswith("/tts"):
+                    await _handle_tts(body, writer)
+                elif path.startswith("/nlu"):
+                    await _handle_nlu(body, writer)
+                else:
+                    _err(writer, 404, "Not found")
+            except Exception as e:
+                log.warning(f"[HTTP] Fehler: {e}", exc_info=True)
+                try:
+                    _err(writer, 500, "ERR")
+                except Exception:
+                    pass
+            await writer.drain()
+    except Exception:
+        pass
     finally:
         try:
-            await writer.drain()
             writer.close()
         except Exception:
             pass
@@ -638,8 +654,8 @@ async def amain() -> None:
     log.info("Lade Modelle …")
     await loop.run_in_executor(None, load_models)
 
-    server = await asyncio.start_server(handle_http, INFER_HOST, INFER_PORT)
-    log.info(f"Inference Server lauscht auf {INFER_HOST}:{INFER_PORT}")
+    server = await asyncio.start_server(handle_http, INFER_BIND, INFER_PORT)
+    log.info(f"Inference Server lauscht auf [{INFER_BIND}]:{INFER_PORT}")
     asyncio.ensure_future(loop.run_in_executor(None, generate_nlu_prompts))
     async with server:
         await server.serve_forever()

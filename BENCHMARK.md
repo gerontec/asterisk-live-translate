@@ -69,6 +69,24 @@ Die real gemessene **PIPE-Latenz 1,43 s** deckt sich mit der Benchmark-**Netz-Se
 
 ---
 
+## HTTP Keep-Alive (eingebaut 2026-07-20)
+
+Zuvor öffnete jeder Infer-Call eine neue TCP-Verbindung → pro Segment 3 Handshakes
+(~130 ms RTT je Handshake). Nun halten **Client** (`audiosocket_translator.py`,
+thread-lokale persistente Verbindung) und **Server** (`inference_server.py`,
+`handle_http` bearbeitet mehrere Requests je Verbindung, Antworten mit
+`Connection: keep-alive`) die Verbindung offen.
+
+Messung eines vollständigen Segments (`/stt`+`/translate`+`/tts`) von ipgate1, 8 Läufe:
+
+| Variante | avg | min | max |
+|---|--:|--:|--:|
+| **fresh** (3 Handshakes, alt) | 1467 ms | 1453 | 1496 |
+| **keep-alive** (1 Verbindung, neu) | 1089 ms | 1066 | 1187 |
+| **Ersparnis** | **≈378 ms/Segment (~26 %)** | | |
+
+(Einzel-Call auf einer Keep-Alive-Verbindung: req1 308 ms inkl. Handshake, req2+ ~168 ms.)
+
 ## Nutzung
 
 ```bash
